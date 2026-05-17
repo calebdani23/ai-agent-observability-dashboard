@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "../api/client";
 import { BarPanel } from "../components/Charts";
-import { Card, DataNotice, LoadingState, PageHeader, StatusBadge } from "../components/ui";
+import { Card, DataNotice, ErrorState, LoadingState, PageHeader, StatusBadge } from "../components/ui";
 import { ms, usd } from "../utils/format";
 
 export function AnalyticsPage() {
@@ -10,6 +10,7 @@ export function AnalyticsPage() {
   const tools = useQuery({ queryKey: ["analytics-tools"], queryFn: apiClient.tools });
   const errors = useQuery({ queryKey: ["analytics-errors"], queryFn: apiClient.errors });
   if (models.isLoading || traces.isLoading || tools.isLoading) return <LoadingState />;
+  if (models.isError || traces.isError || tools.isError || errors.isError) return <ErrorState error={models.error ?? traces.error ?? tools.error ?? errors.error} />;
   const traceItems = traces.data?.data.items ?? [];
   const appTokens = Object.values(traceItems.reduce<Record<string, { app: string; tokens: number }>>((acc, t) => { acc[t.app_name] ??= { app: t.app_name, tokens: 0 }; acc[t.app_name].tokens += t.total_tokens; return acc; }, {}));
   const slowest = [...traceItems].sort((a, b) => b.latency_ms - a.latency_ms).slice(0, 5);

@@ -62,3 +62,7 @@ export interface ErrorMetric { error_type: string; app_name: string; operation: 
 
 export interface DataResult<T> { data: T; source: DataSource; notice?: string; }
 export interface TraceFilters { app_name?: string; model?: string; status?: string; search?: string; limit?: number; offset?: number; }
+
+export interface OpenAISessionStatus { connected: boolean; expires_at?: string | null; key_hint?: string | null; }
+export interface OpenAIRunRequest { prompt: string; model?: string; }
+export interface OpenAIRunResponse { trace_id: string; trace: Trace; response?: string | null; status: TraceStatus | string; }

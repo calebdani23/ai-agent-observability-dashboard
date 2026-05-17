@@ -13,14 +13,16 @@
 
 ```text
 Browser route -> TanStack Query -> API client -> FastAPI -> Postgres
-                         | fetch fails and VITE_DEMO_MODE=true
-                         v
-                  deterministic local demo fixtures
+                          | fetch fails and VITE_DEMO_MODE=true
+                          v
+                   deterministic local demo fixtures
+
+Production default -> fetch fails -> explicit live-only error state
 
 Demo/OpenAI agent -> ObservabilityClient + OBSERVABILITY_INGEST_API_KEY -> POST /api/traces -> metrics/traces update
 ```
 
-The frontend always prefers live backend data. If the backend is unreachable and demo mode is enabled, pages render deterministic fallback data with a visible banner. If demo mode is disabled, the UI shows an error state.
+The frontend always prefers live backend data. Local development enables demo fallback by default unless `VITE_DEMO_MODE=false`; production is live-only by default unless `VITE_DEMO_MODE=true` is explicitly set. If the backend is unreachable and demo mode is enabled, pages render deterministic fallback data with a visible banner. If demo mode is disabled, the UI shows an error state.
 
 ## Deployment flow
 
@@ -35,4 +37,4 @@ Render/Koyeb -> apps/api -> uvicorn main:app --host 0.0.0.0 --port $PORT -> Neon
 - Trace writes are protected when `OBSERVABILITY_INGEST_API_KEY` is configured; health/read endpoints remain public for the dashboard.
 - Cost values are estimated/demo calculations and not billing-grade.
 - The SDK sends completed traces as one payload to match the MVP backend API.
-- Demo fallback is explicit to avoid hiding live API outages.
+- Production is live-only by default so live API outages are not hidden; demo fallback remains explicit when enabled.

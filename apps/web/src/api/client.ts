@@ -1,11 +1,21 @@
 import { demoErrors, demoModels, demoOverview, demoTimeseries, demoTools, demoTraceList, findDemoTrace } from "../data/demoData";
 import { API_URL, DEMO_MODE } from "./config";
-import type { DataResult, ErrorMetric, ModelMetric, OverviewMetrics, TimeseriesPoint, ToolMetric, Trace, TraceFilters, TraceListResponse } from "./types";
+import type { DataResult, ErrorMetric, ModelMetric, OpenAIRunRequest, OpenAIRunResponse, OpenAISessionStatus, OverviewMetrics, TimeseriesPoint, ToolMetric, Trace, TraceFilters, TraceListResponse } from "./types";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, { headers: { "Content-Type": "application/json" }, ...init });
-  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+  if (!response.ok) throw await apiError(response);
   return response.json() as Promise<T>;
+}
+
+async function apiError(response: Response): Promise<Error> {
+  try {
+    const body = await response.json();
+    const detail = body?.detail;
+    if (typeof detail?.message === "string") return Object.assign(new Error(detail.message), { traceId: detail.trace_id });
+    if (typeof detail === "string") return new Error(detail);
+  } catch { /* ignore invalid error JSON */ }
+  return new Error(`${response.status} ${response.statusText}`);
 }
 
 function fallback<T>(data: T, error: unknown): DataResult<T> {
@@ -45,6 +55,13 @@ export const apiClient = {
     catch (error) { return fallback(findDemoTrace(id) ?? demoTraceList.items[0], error); }
   },
   async generateDemo(count = 12) { return request<{ created: number; total_traces: number }>(`/api/demo/generate-traces?count=${count}`, { method: "POST" }); },
+  openAISessionStatus() { return request<OpenAISessionStatus>("/api/openai/session", { credentials: "include" }); },
+  connectOpenAI(apiKey: string) { return request<OpenAISessionStatus>("/api/openai/sessions", { method: "POST", credentials: "include", body: JSON.stringify({ api_key: apiKey }) }); },
+  disconnectOpenAI() { return request<OpenAISessionStatus>("/api/openai/session", { method: "DELETE", credentials: "include" }); },
+  async runOpenAI(payload: OpenAIRunRequest) {
+    const result = await request<OpenAIRunResponse>("/api/openai/runs", { method: "POST", credentials: "include", body: JSON.stringify(payload) });
+    return { ...result, trace: normalizeTrace(result.trace) };
+  },
 };
 
 function asNumber(value: unknown, fallbackValue = 0) { const n = Number(value); return Number.isFinite(n) ? n : fallbackValue; }

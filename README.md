@@ -9,9 +9,10 @@ AI agent behavior is hard to debug when prompts, tool calls, cost and failures a
 ## Features
 
 - Landing page, dashboard, trace explorer, trace detail and analytics routes.
-- Live API integration with explicit local demo fallback when the backend is unavailable.
+- Live API integration with production live-only defaults and explicit local demo fallback when enabled.
 - Metric cards and charts for requests, tokens, estimated cost, latency, model usage and errors.
 - Trace timeline with prompt inspector, step details, metadata, tool-call input/output and redaction notice.
+- Temporary web OpenAI key sessions: users can paste a personal key, the backend stores it encrypted with TTL, runs OpenAI server-side, and records the run as a trace.
 - TypeScript telemetry SDK and demo agent for Travel Planning, Code Review and Customer Support scenarios.
 - Protected ingest path plus a real OpenAI example that posts traces from a server-side/CLI environment.
 - GitHub Pages workflow for the frontend and Render/Koyeb + Neon/Supabase deployment docs for the backend/database.
@@ -29,11 +30,14 @@ docs/                     Architecture, telemetry, deployment, roadmap and prese
 
 ```text
 Browser -> VITE_API_URL -> FastAPI -> Postgres
-   | API unavailable and VITE_DEMO_MODE=true
+   | API unavailable and VITE_DEMO_MODE=true (local dev default; production opt-in)
    v
 deterministic local demo fixtures + visible banner
 
+Production/live-only mode -> API unavailable -> explicit error state, no masked demo data
+
 Demo/OpenAI agent -> telemetry SDK + ingest key -> POST /api/traces -> dashboard/analytics refresh
+Browser OpenAI run -> temporary HttpOnly cookie -> backend decrypts key -> OpenAI -> stored trace
 ```
 
 ## Screenshots
@@ -69,6 +73,8 @@ npm run build
 DATABASE_URL=postgresql://observability:observability@localhost:5432/observability \
 PORT=8000 CORS_ORIGINS=http://localhost:5173 DEMO_MODE=true \
 OBSERVABILITY_INGEST_API_KEY=dev-ingest-key \
+OPENAI_SESSION_ENCRYPTION_KEY=generate-with-python-cryptography-fernet \
+OPENAI_SESSION_HASH_SECRET=replace-with-a-different-long-random-secret \
 uvicorn main:app --app-dir apps/api --host 0.0.0.0 --port 8000
 ```
 
@@ -125,11 +131,13 @@ Frontend variables are safe public `VITE_*` values only:
 
 ```bash
 VITE_API_URL=http://localhost:8000
-VITE_DEMO_MODE=true
+# Leave unset for production live-only builds.
+# For local development only, set VITE_DEMO_MODE=true to enable demo fallback.
+# VITE_DEMO_MODE=true
 VITE_REPO_URL=https://github.com/YOUR_USERNAME/ai-agent-observability-dashboard
 ```
 
-When `VITE_API_URL` is unset, local Vite development defaults to `http://localhost:8000` and production builds default to `https://ai-agent-observability-api.onrender.com`.
+When `VITE_API_URL` is unset, local Vite development defaults to `http://localhost:8000` and production builds default to `https://ai-agent-observability-api.onrender.com`. When `VITE_DEMO_MODE` is unset, local development enables fallback by default, but production is live-only by default. Set `VITE_DEMO_MODE=true` explicitly in production only if you want local demo fixtures to mask API outages.
 
 Backend variables stay server-side:
 
@@ -139,15 +147,23 @@ CORS_ORIGINS=http://localhost:5173,https://YOUR_GITHUB_USERNAME.github.io
 ENVIRONMENT=development
 DEMO_MODE=true
 OBSERVABILITY_INGEST_API_KEY=replace-with-a-long-random-ingest-key
+OPENAI_SESSION_ENCRYPTION_KEY=generate-with-python-cryptography-fernet
+OPENAI_SESSION_HASH_SECRET=replace-with-a-different-long-random-secret
+OPENAI_SESSION_TTL_MINUTES=60
 PORT=8000
 ```
 
 Never commit real `.env` files or secrets.
 
+Generate the Fernet encryption key with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`.
+
+The `#/openai-run` page sends a browser-entered OpenAI key to the backend only, stores it encrypted in Postgres behind an opaque `HttpOnly` cookie, and clears it on disconnect or TTL expiry. The frontend remains secret-free. Prompts and model responses from this MVP are stored as regular traces visible through the current public dashboard/API, so do not submit sensitive prompts or secrets.
+
 ## API summary
 
 - `GET /health`
 - `POST /api/traces` (ingest key if configured), `GET /api/traces`, `GET /api/traces/{trace_id}`, `DELETE /api/traces/{trace_id}` (ingest key if configured)
+- `POST /api/openai/sessions`, `GET /api/openai/session`, `DELETE /api/openai/session`, `POST /api/openai/runs` for temporary encrypted server-side OpenAI key sessions
 - `GET /api/metrics/overview`, `/api/metrics/timeseries`, `/api/metrics/models`, `/api/metrics/tools`, `/api/metrics/errors`
 - `POST /api/demo/generate-traces?count=24`, `POST /api/demo/reset?count=24` (ingest key if configured)
 
@@ -194,5 +210,5 @@ Completed MVP: static dashboard, FastAPI/Postgres traces and metrics, demo fallb
 - Keep frontend static, public and secret-free.
 - Keep backend env-driven and compatible with free hosts.
 - Prefer Postgres for persistence and avoid filesystem storage in production.
-- Show demo fallback explicitly so live API outages are not hidden.
+- Keep production live-only by default; show an explicit error if the API is unavailable, and show demo fallback explicitly only when enabled.
 - Label all cost values as estimated/demo calculations.

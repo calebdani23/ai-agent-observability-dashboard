@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { DEMO_MODE } from "../api/config";
 import { Card, PageHeader } from "../components/ui";
 
 export function LandingPage() {
@@ -10,13 +11,14 @@ export function LandingPage() {
       </PageHeader>
       <div className="actions">
         <Link className="button primary" to="/dashboard">Open Dashboard</Link>
-        <Link className="button secondary" to="/traces">View Demo Traces</Link>
+        <Link className="button secondary" to="/openai-run">Run with your OpenAI key</Link>
+        <Link className="button secondary" to="/traces">{DEMO_MODE ? "View Demo Traces" : "View Live Traces"}</Link>
         {repoUrl && <a className="button secondary" href={repoUrl}>GitHub Repository</a>}
       </div>
       <section className="feature-grid">
         <Card title="LLM monitoring"><p>Inspect model usage, token volumes, estimated cost, latency and status across multiple agent apps.</p></Card>
         <Card title="Agent trace timeline"><p>Open any execution and follow user input, LLM planning, retrieval, tools and final response chronologically.</p></Card>
-        <Card title="Cost analytics"><p>Compare estimated spend by model, app and operation using backend metrics or clear local demo fallback.</p></Card>
+        <Card title="Cost analytics"><p>Compare estimated spend by model, app and operation using live backend metrics{DEMO_MODE ? " with clear local demo fallback when the API is unavailable" : " with explicit live-only errors if the API is unavailable"}.</p></Card>
         <Card title="Tool-call inspection"><p>Debug tool inputs, outputs, failures and retries without placing secrets or sensitive data in the frontend.</p></Card>
       </section>
     </main>

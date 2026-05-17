@@ -3,9 +3,10 @@ import { HashRouter, NavLink, Route, Routes } from "react-router-dom";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { LandingPage } from "./pages/LandingPage";
+import { OpenAIRunPage } from "./pages/OpenAIRunPage";
 import { TraceDetailPage } from "./pages/TraceDetailPage";
 import { TracesPage } from "./pages/TracesPage";
-import { API_URL, DEMO_MODE } from "./api/config";
+import { API_URL, DATA_MODE_LABEL } from "./api/config";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
@@ -21,10 +22,11 @@ function Layout() {
         <nav className="nav-links" aria-label="Primary navigation">
           <NavLink to="/dashboard">Dashboard</NavLink>
           <NavLink to="/traces">Traces</NavLink>
+          <NavLink to="/openai-run">OpenAI Run</NavLink>
           <NavLink to="/analytics">Analytics</NavLink>
         </nav>
         <div className="source-pill" title={`API target: ${API_URL}`}>
-          {DEMO_MODE ? "Demo fallback on" : "Live API only"}
+          {DATA_MODE_LABEL}
         </div>
       </header>
       <Routes>
@@ -32,6 +34,7 @@ function Layout() {
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/traces" element={<TracesPage />} />
         <Route path="/traces/:traceId" element={<TraceDetailPage />} />
+        <Route path="/openai-run" element={<OpenAIRunPage />} />
         <Route path="/analytics" element={<AnalyticsPage />} />
       </Routes>
     </div>

@@ -18,3 +18,9 @@ services:
         value: "true"
       - key: OBSERVABILITY_INGEST_API_KEY
         sync: false
+      - key: OPENAI_SESSION_ENCRYPTION_KEY
+        sync: false
+      - key: OPENAI_SESSION_HASH_SECRET
+        sync: false
+      - key: OPENAI_SESSION_TTL_MINUTES
+        value: "60"
