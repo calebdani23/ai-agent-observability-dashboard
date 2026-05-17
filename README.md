@@ -106,6 +106,8 @@ VITE_DEMO_MODE=true
 VITE_REPO_URL=https://github.com/YOUR_USERNAME/ai-agent-observability-dashboard
 ```
 
+When `VITE_API_URL` is unset, local Vite development defaults to `http://localhost:8000` and production builds default to `https://ai-agent-observability-api.onrender.com`.
+
 Backend variables stay server-side:
 
 ```bash

@@ -1,8 +1,6 @@
 import { demoErrors, demoModels, demoOverview, demoTimeseries, demoTools, demoTraceList, findDemoTrace } from "../data/demoData";
+import { API_URL, DEMO_MODE } from "./config";
 import type { DataResult, ErrorMetric, ModelMetric, OverviewMetrics, TimeseriesPoint, ToolMetric, Trace, TraceFilters, TraceListResponse } from "./types";
-
-const API_URL = (import.meta.env.VITE_API_URL || "http://localhost:8000").replace(/\/$/, "");
-const DEMO_MODE = import.meta.env.VITE_DEMO_MODE !== "false";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, { headers: { "Content-Type": "application/json" }, ...init });

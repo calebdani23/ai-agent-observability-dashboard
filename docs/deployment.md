@@ -4,7 +4,7 @@
 
 1. Push the repository to GitHub.
 2. In **Settings > Pages**, choose **GitHub Actions**.
-3. Optionally create repository variables: `VITE_API_URL`, `VITE_DEMO_MODE=true`, `VITE_REPO_URL`.
+3. Optionally create repository variables: `VITE_API_URL`, `VITE_DEMO_MODE=true`, `VITE_REPO_URL`. If `VITE_API_URL` is unset, production builds target `https://ai-agent-observability-api.onrender.com`; local Vite dev still defaults to `http://localhost:8000`.
 4. Run `.github/workflows/deploy-pages.yml` or push to `main`.
 
 The workflow runs `npm ci`, `npm run build` and uploads `apps/web/dist`. Production Vite base is `/ai-agent-observability-dashboard/`.
@@ -48,6 +48,6 @@ CORS_ORIGINS=http://localhost:5173,https://YOUR_GITHUB_USERNAME.github.io,https:
 ## Troubleshooting
 
 - Blank Pages deploy: confirm Pages source is GitHub Actions and Vite base is `/ai-agent-observability-dashboard/`.
-- Frontend shows demo fallback: verify `VITE_API_URL` and backend CORS.
+- Frontend shows demo fallback: verify `VITE_API_URL` or the default Render API URL, and backend CORS.
 - Backend fails startup: verify `DATABASE_URL` is Postgres and dependencies installed from `apps/api/requirements.txt`.
 - Empty dashboard: seed demo data with `POST /api/demo/reset?count=24` or run the demo agent.

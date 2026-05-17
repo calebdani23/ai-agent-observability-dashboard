@@ -5,15 +5,13 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { LandingPage } from "./pages/LandingPage";
 import { TraceDetailPage } from "./pages/TraceDetailPage";
 import { TracesPage } from "./pages/TracesPage";
+import { API_URL, DEMO_MODE } from "./api/config";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
 });
 
 function Layout() {
-  const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
-  const demoMode = import.meta.env.VITE_DEMO_MODE !== "false";
-
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -25,8 +23,8 @@ function Layout() {
           <NavLink to="/traces">Traces</NavLink>
           <NavLink to="/analytics">Analytics</NavLink>
         </nav>
-        <div className="source-pill" title={`API target: ${apiUrl}`}>
-          {demoMode ? "Demo fallback on" : "Live API only"}
+        <div className="source-pill" title={`API target: ${API_URL}`}>
+          {DEMO_MODE ? "Demo fallback on" : "Live API only"}
         </div>
       </header>
       <Routes>
