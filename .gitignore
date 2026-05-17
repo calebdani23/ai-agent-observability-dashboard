@@ -33,6 +33,7 @@ yarn-error.log*
 .opencode-bin/
 .opencode-runtime/
 scripts/
+sdd/
 
 # Test / coverage
 coverage/
