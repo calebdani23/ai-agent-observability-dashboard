@@ -1,0 +1,41 @@
+# Deployment Guide
+
+## Frontend: GitHub Pages
+
+1. Push the repository to GitHub.
+2. In **Settings > Pages**, choose **GitHub Actions**.
+3. Optionally create repository variables: `VITE_API_URL`, `VITE_DEMO_MODE=true`, `VITE_REPO_URL`.
+4. Run `.github/workflows/deploy-pages.yml` or push to `main`.
+
+The workflow runs `npm ci`, `npm run build` and uploads `apps/web/dist`. Production Vite base is `/ai-agent-observability-dashboard/`.
+
+## Backend: Render
+
+- Root directory: `apps/api`
+- Runtime: Python
+- Build command: `pip install -r requirements.txt`
+- Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
+- Environment variables: `DATABASE_URL`, `CORS_ORIGINS`, `ENVIRONMENT=production`, `DEMO_MODE=true`
+
+## Backend: Koyeb
+
+Use the same Python service settings. Set the working directory to `apps/api`, install `requirements.txt`, and start with `uvicorn main:app --host 0.0.0.0 --port $PORT`.
+
+## Database: Neon or Supabase
+
+Create a free Postgres database and copy the pooled or direct connection string into `DATABASE_URL`. The API creates tables on startup for the MVP. Do not use local filesystem storage for production persistence on free hosts.
+
+## CORS
+
+Set `CORS_ORIGINS` to a comma-separated list, for example:
+
+```bash
+CORS_ORIGINS=http://localhost:5173,https://YOUR_GITHUB_USERNAME.github.io,https://YOUR_GITHUB_USERNAME.github.io/ai-agent-observability-dashboard
+```
+
+## Troubleshooting
+
+- Blank Pages deploy: confirm Pages source is GitHub Actions and Vite base is `/ai-agent-observability-dashboard/`.
+- Frontend shows demo fallback: verify `VITE_API_URL` and backend CORS.
+- Backend fails startup: verify `DATABASE_URL` is Postgres and dependencies installed from `apps/api/requirements.txt`.
+- Empty dashboard: seed demo data with `POST /api/demo/reset?count=24` or run the demo agent.

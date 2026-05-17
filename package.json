@@ -1,0 +1,28 @@
+{
+  "name": "ai-agent-observability-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Portfolio-grade observability dashboard for AI agents, LLM calls, tool usage, tokens, cost, latency, errors, sessions and traces.",
+  "workspaces": [
+    "apps/web",
+    "packages/shared",
+    "packages/telemetry-sdk",
+    "examples/demo-agent"
+  ],
+  "scripts": {
+    "dev": "npm run dev:web",
+    "dev:web": "npm --workspace apps/web run dev",
+    "build": "npm --workspace apps/web run build",
+    "preview:web": "npm --workspace apps/web run preview",
+    "demo:agent": "npm --workspace examples/demo-agent run start",
+    "api:dev": "python3 -m uvicorn main:app --app-dir apps/api --host 0.0.0.0 --port ${PORT:-8000}",
+    "docker:up": "docker compose up --build",
+    "docker:down": "docker compose down"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "tsx": "latest"
+  }
+}

@@ -1,0 +1,60 @@
+services:
+  api:
+    build:
+      context: ./apps/api
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://observability:observability@db:5432/observability}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,https://YOUR_GITHUB_USERNAME.github.io,https://YOUR_GITHUB_USERNAME.github.io/ai-agent-observability-dashboard}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DEMO_MODE: ${DEMO_MODE:-true}
+      PORT: ${PORT:-8000}
+    ports:
+      - "${PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    develop:
+      watch:
+        - action: sync
+          path: ./apps/api
+          target: /app
+        - action: rebuild
+          path: ./apps/api/requirements.txt
+
+  web:
+    image: node:22-alpine
+    working_dir: /workspace
+    command: sh -c "npm install && npm --workspace apps/web run dev -- --host 0.0.0.0"
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+      VITE_DEMO_MODE: ${VITE_DEMO_MODE:-true}
+      VITE_REPO_URL: ${VITE_REPO_URL:-https://github.com/YOUR_USERNAME/ai-agent-observability-dashboard}
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./:/workspace
+      - node_modules:/workspace/node_modules
+      - web_node_modules:/workspace/apps/web/node_modules
+    depends_on:
+      - api
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: observability
+      POSTGRES_USER: observability
+      POSTGRES_PASSWORD: observability
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U observability -d observability"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  node_modules:
+  web_node_modules:
