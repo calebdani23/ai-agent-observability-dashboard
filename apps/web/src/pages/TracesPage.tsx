@@ -37,7 +37,7 @@ export function TracesPage() {
 }
 
 function TraceEmptyState({ dataset, connected }: { dataset: TraceDataset; connected: boolean }) {
-  if (dataset === "my_traces" || dataset === "current_openai_session") return <EmptyState message={connected ? "No private traces have been recorded yet." : "Sign in to view private traces."}><p className="muted">Only traces owned by your authenticated user are shown here.</p><Link className="button primary" to={connected ? "/openai-run" : "/sign-in"}>{connected ? "Run a prompt" : "Sign in"}</Link></EmptyState>;
+  if (dataset === "my_traces" || dataset === "current_openai_session") return <EmptyState message={connected ? "No private traces have been recorded yet." : "Sign in to view private traces."}><p className="muted">Only traces owned by your authenticated user are shown here. Save a provider key and run a prompt to generate the first inspectable trace timeline.</p><div className="actions compact-actions"><Link className="button primary" to={connected ? "/openai-run" : "/sign-in"}>{connected ? "Save key / run first prompt" : "Sign in"}</Link><Link className="button secondary" to="/traces?dataset=demo">Explore demo traces</Link></div></EmptyState>;
   if (dataset === "demo") return <EmptyState message="No demo traces matched the current filters."><p className="muted">Generate backend demo traces or clear filters to inspect seeded telemetry.</p></EmptyState>;
   return <EmptyState message="No traces matched the current filters." />;
 }

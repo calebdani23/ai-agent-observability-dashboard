@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { apiClient } from "../api/client";
 import { datasetLabel, datasetNotice, datasetOptions, defaultDataset } from "../api/datasets";
 import type { TraceDataset } from "../api/types";
@@ -11,8 +11,9 @@ import { useAuth } from "../auth/AuthContext";
 
 export function AnalyticsPage() {
   const auth = useAuth();
-  const [dataset, setDataset] = useState<TraceDataset>(defaultDataset(Boolean(auth.user)));
-  useEffect(() => { setDataset(defaultDataset(Boolean(auth.user))); }, [auth.user?.id]);
+  const [params, setParams] = useSearchParams();
+  const [dataset, setDataset] = useState<TraceDataset>((params.get("dataset") as TraceDataset) || defaultDataset(Boolean(auth.user)));
+  useEffect(() => { if (!params.get("dataset")) setDataset(defaultDataset(Boolean(auth.user))); }, [auth.user?.id, params]);
   const models = useQuery({ queryKey: ["analytics-models", dataset, auth.user?.id], queryFn: () => apiClient.models(dataset), enabled: !auth.loading });
   const traces = useQuery({ queryKey: ["analytics-traces", dataset, auth.user?.id], queryFn: () => apiClient.traces({ dataset, limit: 200 }), enabled: !auth.loading });
   const tools = useQuery({ queryKey: ["analytics-tools", dataset, auth.user?.id], queryFn: () => apiClient.tools(dataset), enabled: !auth.loading });
@@ -29,9 +30,9 @@ export function AnalyticsPage() {
   return (
     <main>
       <PageHeader eyebrow="Analytics" title={`${datasetLabel(dataset)} analytics`}>Estimated/demo values for model spend, slow operations, tool usage and error concentration.</PageHeader>
-      <div className="filter-bar">{datasetOptions.filter((option) => auth.user || !option.requiresSession).map((option) => <button key={option.value} type="button" className={`button ${dataset === option.value ? "primary" : ""}`} onClick={() => setDataset(option.value)}>{option.label}</button>)}</div>
+      <div className="filter-bar">{datasetOptions.filter((option) => auth.user || !option.requiresSession).map((option) => <button key={option.value} type="button" className={`button ${dataset === option.value ? "primary" : ""}`} onClick={() => { setDataset(option.value); const next = new URLSearchParams(params); next.set("dataset", option.value); setParams(next); }}>{option.label}</button>)}</div>
       <DataNotice source={source} notice={notice} />
-      {traceItems.length === 0 && (dataset === "my_traces" || dataset === "current_openai_session") ? <EmptyState message={auth.user ? "No private analytics yet." : "Sign in to view private analytics."}><p className="muted">Private analytics never include another user's traces.</p><Link className="button primary" to={auth.user ? "/openai-run" : "/sign-in"}>{auth.user ? "Run a prompt" : "Sign in"}</Link></EmptyState> : null}
+      {traceItems.length === 0 && (dataset === "my_traces" || dataset === "current_openai_session") ? <EmptyState message={auth.user ? "No private analytics yet." : "Sign in to view private analytics."}><p className="muted">Private analytics never include another user's traces. Save a provider key and run a prompt to populate model spend, token, tool and error breakdowns.</p><div className="actions compact-actions"><Link className="button primary" to={auth.user ? "/openai-run" : "/sign-in"}>{auth.user ? "Save key / run first prompt" : "Sign in"}</Link><Link className="button secondary" to="/analytics?dataset=demo">Explore demo analytics</Link></div></EmptyState> : null}
       <section className="chart-grid"><BarPanel title="Cost by model" data={models.data?.data ?? []} xKey="model" bars={[{ key: "cost", color: "#f59e0b" }]} /><BarPanel title="Tokens by app" data={appTokens} xKey="app" bars={[{ key: "tokens", color: "#38bdf8" }]} /><BarPanel title="Tool usage frequency" data={tools.data?.data ?? []} xKey="tool" bars={[{ key: "count", color: "#22c55e" }]} /><BarPanel title="Error rate by operation/type" data={errors.data?.data ?? []} xKey="operation" bars={[{ key: "count", color: "#ef4444" }]} /></section>
       <section className="two-col"><Ranked title="Slowest operations" rows={slowest.map((t) => ({ name: t.operation, value: ms(t.latency_ms), status: t.status }))} /><Ranked title="Most expensive traces" rows={expensive.map((t) => ({ name: t.operation, value: usd(t.estimated_cost_usd), status: t.status }))} /></section>
     </main>

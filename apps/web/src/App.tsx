@@ -34,7 +34,8 @@ function Layout() {
         </div>
       </header>
       <Routes>
-        <Route path="/" element={<LandingPage />} />
+        <Route path="/" element={<SignInPage />} />
+        <Route path="/welcome" element={<LandingPage />} />
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/traces" element={<TracesPage />} />
         <Route path="/traces/:traceId" element={<TraceDetailPage />} />

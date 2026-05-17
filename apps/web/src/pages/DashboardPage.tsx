@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { apiClient } from "../api/client";
 import { datasetLabel, datasetNotice, datasetOptions, defaultDataset } from "../api/datasets";
 import type { DataResult, DataSource, TraceDataset } from "../api/types";
@@ -22,8 +22,9 @@ function dashboardSourceNotice(results: Array<DataResult<unknown> | undefined>):
 
 export function DashboardPage() {
   const auth = useAuth();
-  const [dataset, setDataset] = useState<TraceDataset>(defaultDataset(Boolean(auth.user)));
-  useEffect(() => { setDataset(defaultDataset(Boolean(auth.user))); }, [auth.user?.id]);
+  const [params, setParams] = useSearchParams();
+  const [dataset, setDataset] = useState<TraceDataset>((params.get("dataset") as TraceDataset) || defaultDataset(Boolean(auth.user)));
+  useEffect(() => { if (!params.get("dataset")) setDataset(defaultDataset(Boolean(auth.user))); }, [auth.user?.id, params]);
   const overview = useQuery({ queryKey: ["overview", dataset, auth.user?.id], queryFn: () => apiClient.overview(dataset), enabled: !auth.loading });
   const timeseries = useQuery({ queryKey: ["timeseries", dataset, auth.user?.id], queryFn: () => apiClient.timeseries(dataset), enabled: !auth.loading });
   const models = useQuery({ queryKey: ["models", dataset, auth.user?.id], queryFn: () => apiClient.models(dataset), enabled: !auth.loading });
@@ -37,7 +38,7 @@ export function DashboardPage() {
   return (
     <main>
       <PageHeader eyebrow="Overview" title={`${datasetLabel(dataset)} control room`}>Track request volume, latency, errors and estimated model spend.</PageHeader>
-      <DatasetSelector dataset={dataset} connected={Boolean(auth.user)} onChange={setDataset} />
+      <DatasetSelector dataset={dataset} connected={Boolean(auth.user)} onChange={(nextDataset) => { setDataset(nextDataset); const next = new URLSearchParams(params); next.set("dataset", nextDataset); setParams(next); }} />
       <DataNotice source={sourceNotice.source ?? "live"} notice={sourceNotice.notice ?? datasetNotice(dataset, Boolean(auth.user))} />
       {data.total_requests === 0 ? <DatasetEmptyState dataset={dataset} connected={Boolean(auth.user)} /> : null}
       <section className="metric-grid">
@@ -66,7 +67,7 @@ function DatasetSelector({ dataset, connected, onChange }: { dataset: TraceDatas
 }
 
 function DatasetEmptyState({ dataset, connected }: { dataset: TraceDataset; connected: boolean }) {
-  if (dataset === "my_traces" || dataset === "current_openai_session") return <EmptyState message={connected ? "No private traces yet." : "Sign in to view private traces."}><p className="muted">Run a prompt to create your first private trace.</p><Link className="button primary" to={connected ? "/openai-run" : "/sign-in"}>{connected ? "Run a prompt" : "Sign in"}</Link></EmptyState>;
-  if (dataset === "demo") return <EmptyState message="No demo traces are available."><p className="muted">Generate demo traces from the API or switch to all live traces.</p></EmptyState>;
+  if (dataset === "my_traces" || dataset === "current_openai_session") return <EmptyState message={connected ? "Your private dashboard is ready, but no traces exist yet." : "Sign in to view private traces."}><p className="muted">Next: save your provider key, run a first prompt, then return here to see volume, latency, cost and error metrics for your own traces.</p><div className="actions compact-actions"><Link className="button primary" to={connected ? "/openai-run" : "/sign-in"}>{connected ? "Save key / run first prompt" : "Sign in"}</Link><Link className="button secondary" to="/dashboard?dataset=demo">Explore demo instead</Link></div></EmptyState>;
+  if (dataset === "demo") return <EmptyState message="No demo traces are available."><p className="muted">Generate demo traces from the API or switch back to your private workspace after recording a real prompt.</p></EmptyState>;
   return <EmptyState message="No traces are available for this dataset." />;
 }
