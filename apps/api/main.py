@@ -15,7 +15,7 @@ from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Requ
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text, create_engine, delete, func, select
+from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text, create_engine, delete, false, func, select
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 from sqlalchemy.types import JSON
@@ -24,6 +24,8 @@ from sqlalchemy.types import JSON
 TraceStatus = Literal["success", "error", "warning"]
 StepType = Literal["user_message", "llm_call", "tool_call", "retrieval", "final_response", "error"]
 ToolStatus = Literal["success", "error"]
+TraceKind = Literal["demo", "real_web_session", "other_real_ingest"]
+TraceDataset = Literal["current_openai_session", "all_real", "demo", "all"]
 
 MODEL_PRICING: dict[str, dict[str, Decimal]] = {
     "gpt-4.1-mini": {"inputPer1M": Decimal("0.40"), "outputPer1M": Decimal("1.60")},
@@ -328,6 +330,8 @@ class TraceRead(BaseModel):
     estimated_cost_usd: Decimal
     error_message: str | None
     metadata: dict[str, Any] | None
+    trace_kind: TraceKind
+    is_current_openai_session_trace: bool | None = None
     steps: list[TraceStepRead] = Field(default_factory=list)
     tool_calls: list[ToolCallRead] = Field(default_factory=list)
 
@@ -371,6 +375,79 @@ class OpenAIRunResponse(BaseModel):
     status: TraceStatus
 
 
+def is_demo_trace_metadata(metadata: dict[str, Any] | None) -> bool:
+    if not metadata:
+        return False
+    return (
+        metadata.get("demo") is True
+        or metadata.get("trace_kind") == "demo"
+        or metadata.get("source") in {"demo", "local_demo", "backend_demo", "demo-agent"}
+        or metadata.get("generated_by") == "examples/demo-agent"
+    )
+
+
+def is_web_openai_trace(trace: AITrace) -> bool:
+    metadata = trace.metadata_ or {}
+    return (
+        metadata.get("source") == "web_openai_session"
+        and trace.app_name == "web-openai-runner"
+        and trace.provider == "openai"
+        and trace.session_id.startswith("web_openai_")
+    )
+
+
+def classify_trace(trace: AITrace) -> TraceKind:
+    if is_demo_trace_metadata(trace.metadata_):
+        return "demo"
+    if is_web_openai_trace(trace):
+        return "real_web_session"
+    return "other_real_ingest"
+
+
+def demo_trace_condition():
+    condition = (
+        (AITrace.metadata_["demo"].as_boolean() == True)  # noqa: E712
+        | (AITrace.metadata_["trace_kind"].as_string() == "demo")
+        | (AITrace.metadata_["source"].as_string().in_(["demo", "local_demo", "backend_demo", "demo-agent"]))
+        | (AITrace.metadata_["generated_by"].as_string() == "examples/demo-agent")
+    )
+    return func.coalesce(condition, false())
+
+
+def web_openai_trace_condition():
+    return (
+        (AITrace.metadata_["source"].as_string() == "web_openai_session")
+        & (AITrace.app_name == "web-openai-runner")
+        & (AITrace.provider == "openai")
+        & (AITrace.session_id.startswith("web_openai_"))
+    )
+
+
+def current_openai_trace_session_id(session_row: OpenAISession) -> str:
+    return f"web_openai_{session_row.session_id_hash[:12]}"
+
+
+def get_current_openai_session_trace_id(db: Session, raw_session_id: str | None) -> str | None:
+    session_row = get_current_openai_session(db, raw_session_id)
+    if session_row is None:
+        return None
+    return current_openai_trace_session_id(session_row)
+
+
+def dataset_filter_condition(dataset: TraceDataset | None, current_session_trace_id: str | None = None):
+    if dataset is None or dataset == "all":
+        return None
+    if dataset == "demo":
+        return demo_trace_condition()
+    if dataset == "all_real":
+        return ~demo_trace_condition()
+    if dataset == "current_openai_session":
+        if current_session_trace_id is None:
+            return false()
+        return (AITrace.session_id == current_session_trace_id) & web_openai_trace_condition() & ~demo_trace_condition()
+    return None
+
+
 def serialize_tool_call(tool_call: ToolCall) -> ToolCallRead:
     return ToolCallRead.model_validate(tool_call)
 
@@ -394,7 +471,10 @@ def serialize_step(step: TraceStep) -> TraceStepRead:
     )
 
 
-def serialize_trace(trace: AITrace, include_children: bool = True) -> TraceRead:
+def serialize_trace(trace: AITrace, include_children: bool = True, current_session_trace_id: str | None = None) -> TraceRead:
+    is_current = None
+    if current_session_trace_id is not None and classify_trace(trace) == "real_web_session":
+        is_current = trace.session_id == current_session_trace_id
     return TraceRead(
         id=trace.id,
         app_name=trace.app_name,
@@ -413,6 +493,8 @@ def serialize_trace(trace: AITrace, include_children: bool = True) -> TraceRead:
         estimated_cost_usd=trace.estimated_cost_usd,
         error_message=trace.error_message,
         metadata=trace.metadata_,
+        trace_kind=classify_trace(trace),
+        is_current_openai_session_trace=is_current,
         steps=[serialize_step(step) for step in trace.steps] if include_children else [],
         tool_calls=[serialize_tool_call(tool_call) for tool_call in trace.tool_calls] if include_children else [],
     )
@@ -488,7 +570,8 @@ def create_trace_record(db: Session, payload: TraceCreate) -> AITrace:
 
 
 OPENAI_SESSION_COOKIE = "ai_openai_session"
-OPENAI_SESSION_COOKIE_PATH = "/api/openai"
+OPENAI_SESSION_COOKIE_PATH = "/api"
+OPENAI_LEGACY_SESSION_COOKIE_PATH = "/api/openai"
 OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
 
 
@@ -589,6 +672,13 @@ def clear_openai_cookie(response: Response) -> None:
     response.delete_cookie(
         OPENAI_SESSION_COOKIE,
         path=OPENAI_SESSION_COOKIE_PATH,
+        secure=settings.openai_cookie_secure,
+        samesite=settings.openai_cookie_samesite,
+        httponly=True,
+    )
+    response.delete_cookie(
+        OPENAI_SESSION_COOKIE,
+        path=OPENAI_LEGACY_SESSION_COOKIE_PATH,
         secure=settings.openai_cookie_secure,
         samesite=settings.openai_cookie_samesite,
         httponly=True,
@@ -706,6 +796,7 @@ def create_web_openai_trace(
             error_message=error_message,
             metadata={
                 "source": "web_openai_session",
+                "trace_kind": "real_web_session",
                 "key_hint": session_row.key_hint,
                 "privacy_notice": "Prompt and response are stored as traces visible anywhere this dashboard/API is visible.",
             },
@@ -844,16 +935,22 @@ def create_trace(payload: TraceCreate, db: DbSession, _: IngestAuth) -> TraceRea
 @app.get("/api/traces", response_model=TraceListResponse, tags=["traces"])
 def list_traces(
     db: DbSession,
+    dataset: TraceDataset | None = None,
     app_name: str | None = None,
     model: str | None = None,
     status_: Annotated[str | None, Query(alias="status")] = None,
     search: str | None = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
+    ai_openai_session: Annotated[str | None, Cookie(alias=OPENAI_SESSION_COOKIE)] = None,
 ) -> TraceListResponse:
     query = select(AITrace)
     count_query = select(func.count()).select_from(AITrace)
     filters = []
+    current_session_trace_id = get_current_openai_session_trace_id(db, ai_openai_session) if dataset == "current_openai_session" else None
+    dataset_condition = dataset_filter_condition(dataset, current_session_trace_id)
+    if dataset_condition is not None:
+        filters.append(dataset_condition)
     if app_name:
         filters.append(AITrace.app_name == app_name)
     if model:
@@ -868,15 +965,19 @@ def list_traces(
         count_query = count_query.where(*filters)
     total = db.scalar(count_query) or 0
     traces = db.scalars(query.order_by(AITrace.started_at.desc()).limit(limit).offset(offset)).unique().all()
-    return TraceListResponse(total=total, limit=limit, offset=offset, items=[serialize_trace(trace, include_children=False) for trace in traces])
+    return TraceListResponse(total=total, limit=limit, offset=offset, items=[serialize_trace(trace, include_children=False, current_session_trace_id=current_session_trace_id) for trace in traces])
 
 
 @app.get("/api/traces/{trace_id}", response_model=TraceRead, tags=["traces"])
-def get_trace(trace_id: UUID, db: DbSession) -> TraceRead:
+def get_trace(
+    trace_id: UUID,
+    db: DbSession,
+    ai_openai_session: Annotated[str | None, Cookie(alias=OPENAI_SESSION_COOKIE)] = None,
+) -> TraceRead:
     trace = db.get(AITrace, trace_id)
     if trace is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trace not found")
-    return serialize_trace(trace)
+    return serialize_trace(trace, current_session_trace_id=get_current_openai_session_trace_id(db, ai_openai_session))
 
 
 @app.delete("/api/traces/{trace_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["traces"])
@@ -889,15 +990,26 @@ def delete_trace(trace_id: UUID, db: DbSession, _: IngestAuth) -> None:
 
 
 @app.get("/api/metrics/overview", tags=["metrics"])
-def metrics_overview(db: DbSession) -> dict[str, Any]:
-    total_requests = db.scalar(select(func.count()).select_from(AITrace)) or 0
-    total_tokens = db.scalar(select(func.coalesce(func.sum(AITrace.total_tokens), 0))) or 0
-    total_cost = db.scalar(select(func.coalesce(func.sum(AITrace.estimated_cost_usd), 0))) or Decimal("0")
-    avg_latency = db.scalar(select(func.coalesce(func.avg(AITrace.latency_ms), 0))) or 0
-    errors = db.scalar(select(func.count()).select_from(AITrace).where(AITrace.status == "error")) or 0
-    tool_calls = db.scalar(select(func.count()).select_from(ToolCall)) or 0
-    active_apps = db.scalar(select(func.count(func.distinct(AITrace.app_name)))) or 0
-    sessions = db.scalar(select(func.count(func.distinct(AITrace.session_id)))) or 0
+def metrics_overview(
+    db: DbSession,
+    dataset: TraceDataset | None = None,
+    ai_openai_session: Annotated[str | None, Cookie(alias=OPENAI_SESSION_COOKIE)] = None,
+) -> dict[str, Any]:
+    current_session_trace_id = get_current_openai_session_trace_id(db, ai_openai_session) if dataset == "current_openai_session" else None
+    condition = dataset_filter_condition(dataset, current_session_trace_id)
+
+    def filtered(statement):
+        return statement.where(condition) if condition is not None else statement
+
+    total_requests = db.scalar(filtered(select(func.count()).select_from(AITrace))) or 0
+    total_tokens = db.scalar(filtered(select(func.coalesce(func.sum(AITrace.total_tokens), 0)))) or 0
+    total_cost = db.scalar(filtered(select(func.coalesce(func.sum(AITrace.estimated_cost_usd), 0)))) or Decimal("0")
+    avg_latency = db.scalar(filtered(select(func.coalesce(func.avg(AITrace.latency_ms), 0)))) or 0
+    errors = db.scalar(filtered(select(func.count()).select_from(AITrace).where(AITrace.status == "error"))) or 0
+    tool_calls_query = select(func.count(ToolCall.id)).join(AITrace, ToolCall.trace_id == AITrace.id)
+    tool_calls = db.scalar(tool_calls_query.where(condition) if condition is not None else select(func.count()).select_from(ToolCall)) or 0
+    active_apps = db.scalar(filtered(select(func.count(func.distinct(AITrace.app_name))))) or 0
+    sessions = db.scalar(filtered(select(func.count(func.distinct(AITrace.session_id))))) or 0
     return {
         "total_requests": total_requests,
         "total_tokens": int(total_tokens),
@@ -911,16 +1023,25 @@ def metrics_overview(db: DbSession) -> dict[str, Any]:
 
 
 @app.get("/api/metrics/timeseries", tags=["metrics"])
-def metrics_timeseries(db: DbSession) -> list[dict[str, Any]]:
+def metrics_timeseries(
+    db: DbSession,
+    dataset: TraceDataset | None = None,
+    ai_openai_session: Annotated[str | None, Cookie(alias=OPENAI_SESSION_COOKIE)] = None,
+) -> list[dict[str, Any]]:
     day = func.date(AITrace.started_at)
+    current_session_trace_id = get_current_openai_session_trace_id(db, ai_openai_session) if dataset == "current_openai_session" else None
+    condition = dataset_filter_condition(dataset, current_session_trace_id)
+    query = select(
+        day.label("day"),
+        func.count(AITrace.id),
+        func.coalesce(func.sum(AITrace.total_tokens), 0),
+        func.coalesce(func.sum(AITrace.estimated_cost_usd), 0),
+        func.coalesce(func.avg(AITrace.latency_ms), 0),
+    )
+    if condition is not None:
+        query = query.where(condition)
     rows = db.execute(
-        select(
-            day.label("day"),
-            func.count(AITrace.id),
-            func.coalesce(func.sum(AITrace.total_tokens), 0),
-            func.coalesce(func.sum(AITrace.estimated_cost_usd), 0),
-            func.coalesce(func.avg(AITrace.latency_ms), 0),
-        )
+        query
         .group_by(day)
         .order_by(day)
     ).all()
@@ -931,9 +1052,14 @@ def metrics_timeseries(db: DbSession) -> list[dict[str, Any]]:
 
 
 @app.get("/api/metrics/models", tags=["metrics"])
-def metrics_models(db: DbSession) -> list[dict[str, Any]]:
-    rows = db.execute(
-        select(
+def metrics_models(
+    db: DbSession,
+    dataset: TraceDataset | None = None,
+    ai_openai_session: Annotated[str | None, Cookie(alias=OPENAI_SESSION_COOKIE)] = None,
+) -> list[dict[str, Any]]:
+    current_session_trace_id = get_current_openai_session_trace_id(db, ai_openai_session) if dataset == "current_openai_session" else None
+    condition = dataset_filter_condition(dataset, current_session_trace_id)
+    query = select(
             AITrace.model,
             func.count(AITrace.id),
             func.coalesce(func.sum(AITrace.input_tokens), 0),
@@ -942,6 +1068,10 @@ def metrics_models(db: DbSession) -> list[dict[str, Any]]:
             func.coalesce(func.sum(AITrace.estimated_cost_usd), 0),
             func.coalesce(func.avg(AITrace.latency_ms), 0),
         )
+    if condition is not None:
+        query = query.where(condition)
+    rows = db.execute(
+        query
         .group_by(AITrace.model)
         .order_by(func.count(AITrace.id).desc())
     ).all()
@@ -960,9 +1090,18 @@ def metrics_models(db: DbSession) -> list[dict[str, Any]]:
 
 
 @app.get("/api/metrics/tools", response_model=list[ToolMetric], tags=["metrics"])
-def metrics_tools(db: DbSession) -> list[ToolMetric]:
+def metrics_tools(
+    db: DbSession,
+    dataset: TraceDataset | None = None,
+    ai_openai_session: Annotated[str | None, Cookie(alias=OPENAI_SESSION_COOKIE)] = None,
+) -> list[ToolMetric]:
+    current_session_trace_id = get_current_openai_session_trace_id(db, ai_openai_session) if dataset == "current_openai_session" else None
+    condition = dataset_filter_condition(dataset, current_session_trace_id)
+    query = select(ToolCall.tool_name, func.count(ToolCall.id)).join(AITrace, ToolCall.trace_id == AITrace.id)
+    if condition is not None:
+        query = query.where(condition)
     rows = db.execute(
-        select(ToolCall.tool_name, func.count(ToolCall.id))
+        query
         .group_by(ToolCall.tool_name)
         .order_by(func.count(ToolCall.id).desc(), ToolCall.tool_name)
     ).all()
@@ -970,11 +1109,20 @@ def metrics_tools(db: DbSession) -> list[ToolMetric]:
 
 
 @app.get("/api/metrics/errors", tags=["metrics"])
-def metrics_errors(db: DbSession) -> list[dict[str, Any]]:
+def metrics_errors(
+    db: DbSession,
+    dataset: TraceDataset | None = None,
+    ai_openai_session: Annotated[str | None, Cookie(alias=OPENAI_SESSION_COOKIE)] = None,
+) -> list[dict[str, Any]]:
     error_type = func.coalesce(AITrace.error_message, "unknown")
+    current_session_trace_id = get_current_openai_session_trace_id(db, ai_openai_session) if dataset == "current_openai_session" else None
+    condition = dataset_filter_condition(dataset, current_session_trace_id)
+    filters = [AITrace.status == "error"]
+    if condition is not None:
+        filters.append(condition)
     rows = db.execute(
         select(error_type, AITrace.app_name, AITrace.operation, func.count(AITrace.id))
-        .where(AITrace.status == "error")
+        .where(*filters)
         .group_by(error_type, AITrace.app_name, AITrace.operation)
         .order_by(func.count(AITrace.id).desc())
     ).all()

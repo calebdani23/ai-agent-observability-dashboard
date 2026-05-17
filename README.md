@@ -163,6 +163,7 @@ The `#/openai-run` page sends a browser-entered OpenAI key to the backend only, 
 
 - `GET /health`
 - `POST /api/traces` (ingest key if configured), `GET /api/traces`, `GET /api/traces/{trace_id}`, `DELETE /api/traces/{trace_id}` (ingest key if configured)
+- Trace and metrics reads support `dataset=current_openai_session|all_real|demo|all`. `current_openai_session` is a convenience filter based on the temporary OpenAI session cookie; it is not account auth or privacy isolation, and missing/expired sessions return empty scoped results.
 - `POST /api/openai/sessions`, `GET /api/openai/session`, `DELETE /api/openai/session`, `POST /api/openai/runs` for temporary encrypted server-side OpenAI key sessions
 - `GET /api/metrics/overview`, `/api/metrics/timeseries`, `/api/metrics/models`, `/api/metrics/tools`, `/api/metrics/errors`
 - `POST /api/demo/generate-traces?count=24`, `POST /api/demo/reset?count=24` (ingest key if configured)

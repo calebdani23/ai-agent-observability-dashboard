@@ -1,5 +1,7 @@
 export type TraceStatus = "success" | "warning" | "error";
 export type DataSource = "live" | "local-demo" | "error";
+export type TraceKind = "demo" | "real_web_session" | "other_real_ingest";
+export type TraceDataset = "current_openai_session" | "all_real" | "demo" | "all";
 
 export interface ToolCall {
   id: string;
@@ -49,6 +51,8 @@ export interface Trace {
   estimated_cost_usd: number | string;
   error_message?: string | null;
   metadata?: Record<string, unknown> | null;
+  trace_kind: TraceKind;
+  is_current_openai_session_trace?: boolean | null;
   steps: TraceStep[];
   tool_calls: ToolCall[];
 }
@@ -61,7 +65,7 @@ export interface ToolMetric { tool: string; count: number; }
 export interface ErrorMetric { error_type: string; app_name: string; operation: string; count: number; }
 
 export interface DataResult<T> { data: T; source: DataSource; notice?: string; }
-export interface TraceFilters { app_name?: string; model?: string; status?: string; search?: string; limit?: number; offset?: number; }
+export interface TraceFilters { app_name?: string; model?: string; status?: string; search?: string; limit?: number; offset?: number; dataset?: TraceDataset; }
 
 export interface OpenAISessionStatus { connected: boolean; expires_at?: string | null; key_hint?: string | null; }
 export interface OpenAIRunRequest { prompt: string; model?: string; }

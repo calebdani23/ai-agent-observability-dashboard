@@ -80,7 +80,7 @@ export function OpenAIRunPage() {
           </form>
           {error && <div className="data-notice error">{error}</div>}
           {response !== null && <div className="result-box"><h3>OpenAI response</h3><p>{response}</p></div>}
-          {traceId && <Link className="button secondary" to={`/traces/${traceId}`}>{error ? "Open failed trace" : "Open generated trace"}</Link>}
+          {traceId && <div className="filter-bar"><Link className="button secondary" to={`/traces/${traceId}`}>{error ? "Open failed trace" : "Open generated trace"}</Link><Link className="button primary" to="/traces?dataset=current_openai_session">View my live traces</Link></div>}
         </Card>
       </section>
     </main>

@@ -71,6 +71,8 @@ function trace(id: string, app: string, operation: string, model: string, status
     id, app_name: app, session_id: `session-${id.slice(-1)}${hoursAgo}7`, user_id: "demo-user", operation, model, provider: "mock", status,
     started_at: started, ended_at: iso(hoursAgo - latency / 3_600_000), latency_ms: latency, input_tokens: input, output_tokens: output, total_tokens: total, estimated_cost_usd: cost, error_message: error ?? null,
     metadata: { demo: true, system_prompt: "You are a careful AI agent. Minimize sensitive data exposure and cite tool outputs.", user_prompt: `Run ${operation} for a synthetic user request.`, structured_output: { confidence: status === "error" ? 0.42 : 0.88, next_action: status === "warning" ? "human_review" : "complete" } },
+    trace_kind: "demo",
+    is_current_openai_session_trace: false,
     steps: [
       { id: `${stepBase}-1`, trace_id: id, step_type: "user_message", name: "User request", input: `Synthetic request for ${operation}.`, output: null, metadata: { channel: "web" }, started_at: started, latency_ms: 24, input_tokens: 0, output_tokens: 0, estimated_cost_usd: 0, tool_calls: [] },
       { id: `${stepBase}-2`, trace_id: id, step_type: "llm_call", name: "Plan next action", input: "System prompt + user intent (redacted demo).", output: `Plan: call ${toolName}, validate output, produce final answer.`, metadata: { temperature: 0.2 }, started_at: iso(hoursAgo - 0.01), latency_ms: Math.round(latency * 0.38), input_tokens: Math.round(input * 0.45), output_tokens: Math.round(output * 0.3), estimated_cost_usd: Number((cost * 0.42).toFixed(6)), tool_calls: [] },
