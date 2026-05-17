@@ -1,6 +1,8 @@
 import { FormEvent, useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { apiClient } from "../api/client";
+import { invalidateWorkspaceQueries } from "../api/queryKeys";
 import type { OpenAISessionStatus } from "../api/types";
 import { Card, PageHeader } from "../components/ui";
 import { useAuth } from "../auth/AuthContext";
@@ -19,6 +21,7 @@ function errorTraceId(error: unknown) {
 export function OpenAIRunPage() {
   const [session, setSession] = useState<OpenAISessionStatus>({ connected: false });
   const auth = useAuth();
+  const queryClient = useQueryClient();
   const [checking, setChecking] = useState(true);
   const [apiKey, setApiKey] = useState("");
   const [prompt, setPrompt] = useState("Summarize one practical benefit of AI observability in two sentences.");
@@ -28,25 +31,26 @@ export function OpenAIRunPage() {
   const [busy, setBusy] = useState<"connect" | "disconnect" | "run" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const sessionStatus = useQuery({ queryKey: ["openai-session", auth.user?.id], queryFn: () => apiClient.openAISessionStatus(), enabled: Boolean(auth.user) && !auth.loading });
+
   useEffect(() => {
     if (!auth.user) { setSession({ connected: false }); setChecking(false); return; }
-    apiClient.openAISessionStatus()
-      .then(setSession)
-      .catch(() => setSession({ connected: false }))
-      .finally(() => setChecking(false));
-  }, [auth.user?.id]);
+    setChecking(sessionStatus.isLoading);
+    if (sessionStatus.data) setSession(sessionStatus.data);
+    if (sessionStatus.isError) setSession({ connected: false });
+  }, [auth.user, sessionStatus.data, sessionStatus.isError, sessionStatus.isLoading]);
 
   async function connect(event: FormEvent) {
     event.preventDefault();
     setBusy("connect"); setError(null); setResponse(null); setTraceId(null);
-    try { const status = await apiClient.connectOpenAI(apiKey); setSession(status); setApiKey(""); }
+    try { const status = await apiClient.connectOpenAI(apiKey); setSession(status); setApiKey(""); await invalidateWorkspaceQueries(queryClient); }
     catch (err) { setError(errorMessage(err)); const failedTraceId = errorTraceId(err); if (failedTraceId) setTraceId(failedTraceId); }
     finally { setBusy(null); }
   }
 
   async function disconnect() {
     setBusy("disconnect"); setError(null);
-    try { setSession(await apiClient.disconnectOpenAI()); setResponse(null); setTraceId(null); }
+    try { setSession(await apiClient.disconnectOpenAI()); setResponse(null); setTraceId(null); await invalidateWorkspaceQueries(queryClient); }
     catch (err) { setError(errorMessage(err)); const failedTraceId = errorTraceId(err); if (failedTraceId) setTraceId(failedTraceId); }
     finally { setBusy(null); }
   }
@@ -54,7 +58,7 @@ export function OpenAIRunPage() {
   async function run(event: FormEvent) {
     event.preventDefault();
     setBusy("run"); setError(null); setResponse(null); setTraceId(null);
-    try { const result = await apiClient.runOpenAI({ prompt, model }); setResponse(result.response ?? ""); setTraceId(result.trace_id); }
+    try { const result = await apiClient.runOpenAI({ prompt, model }); setResponse(result.response ?? ""); setTraceId(result.trace_id); await invalidateWorkspaceQueries(queryClient); }
     catch (err) { setError(errorMessage(err)); const failedTraceId = errorTraceId(err); if (failedTraceId) setTraceId(failedTraceId); }
     finally { setBusy(null); }
   }
