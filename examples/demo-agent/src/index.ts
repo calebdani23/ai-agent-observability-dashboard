@@ -1,6 +1,7 @@
 import { ObservabilityClient, type TraceStatus } from "@portfolio/telemetry-sdk";
 
 const apiUrl = process.env.OBSERVABILITY_API_URL ?? "http://localhost:8000";
+const apiKey = process.env.OBSERVABILITY_INGEST_API_KEY;
 const count = Number(process.env.DEMO_TRACE_COUNT ?? process.env.COUNT ?? 9);
 const models = ["gpt-4.1-mini", "gpt-4o-mini", "claude-3.5-haiku", "mock-fast"];
 const scenarios = [
@@ -14,7 +15,7 @@ async function main() {
   for (let i = 0; i < count; i += 1) {
     const scenario = scenarios[i % scenarios.length];
     const model = models[i % models.length];
-    const client = new ObservabilityClient({ apiUrl, appName: scenario.appName, defaultModel: model, defaultProvider: "mock", metadata: { generated_by: "examples/demo-agent" } });
+    const client = new ObservabilityClient({ apiUrl, apiKey, appName: scenario.appName, defaultModel: model, defaultProvider: "mock", metadata: { generated_by: "examples/demo-agent" } });
     const status: TraceStatus = i % 7 === 3 ? "error" : i % 5 === 2 ? "warning" : "success";
     const inputTokens = 900 + i * 185;
     const outputTokens = 260 + i * 77;

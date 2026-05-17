@@ -13,6 +13,7 @@ AI agent behavior is hard to debug when prompts, tool calls, cost and failures a
 - Metric cards and charts for requests, tokens, estimated cost, latency, model usage and errors.
 - Trace timeline with prompt inspector, step details, metadata, tool-call input/output and redaction notice.
 - TypeScript telemetry SDK and demo agent for Travel Planning, Code Review and Customer Support scenarios.
+- Protected ingest path plus a real OpenAI example that posts traces from a server-side/CLI environment.
 - GitHub Pages workflow for the frontend and Render/Koyeb + Neon/Supabase deployment docs for the backend/database.
 
 ## Architecture
@@ -32,7 +33,7 @@ Browser -> VITE_API_URL -> FastAPI -> Postgres
    v
 deterministic local demo fixtures + visible banner
 
-Demo agent -> telemetry SDK -> POST /api/traces -> dashboard/analytics refresh
+Demo/OpenAI agent -> telemetry SDK + ingest key -> POST /api/traces -> dashboard/analytics refresh
 ```
 
 ## Screenshots
@@ -67,6 +68,7 @@ npm run build
 ```bash
 DATABASE_URL=postgresql://observability:observability@localhost:5432/observability \
 PORT=8000 CORS_ORIGINS=http://localhost:5173 DEMO_MODE=true \
+OBSERVABILITY_INGEST_API_KEY=dev-ingest-key \
 uvicorn main:app --app-dir apps/api --host 0.0.0.0 --port 8000
 ```
 
@@ -96,6 +98,27 @@ OBSERVABILITY_API_URL=http://localhost:8000 DEMO_TRACE_COUNT=9 npm run demo:agen
 
 The demo agent creates successful, warning and error traces with realistic steps and tool calls. No provider keys are required.
 
+If `OBSERVABILITY_INGEST_API_KEY` is set on the backend, include the same variable when running write scripts:
+
+```bash
+OBSERVABILITY_API_URL=http://localhost:8000 \
+OBSERVABILITY_INGEST_API_KEY=dev-ingest-key \
+DEMO_TRACE_COUNT=9 npm run demo:agent
+```
+
+## Real OpenAI integration
+
+Run a real OpenAI call from a server-side/CLI environment, record LLM/tool steps, and send the trace to the backend:
+
+```bash
+OPENAI_API_KEY=replace-with-your-openai-api-key \
+OBSERVABILITY_API_URL=http://localhost:8000 \
+OBSERVABILITY_INGEST_API_KEY=dev-ingest-key \
+npm run openai:agent
+```
+
+Optional: `OPENAI_MODEL=gpt-4o-mini` and `OPENAI_AGENT_PROMPT="..."`. Keep `OPENAI_API_KEY` and `OBSERVABILITY_INGEST_API_KEY` out of frontend `VITE_*` variables.
+
 ## Environment variables
 
 Frontend variables are safe public `VITE_*` values only:
@@ -115,6 +138,7 @@ DATABASE_URL=postgresql://user:password@host:5432/dbname
 CORS_ORIGINS=http://localhost:5173,https://YOUR_GITHUB_USERNAME.github.io
 ENVIRONMENT=development
 DEMO_MODE=true
+OBSERVABILITY_INGEST_API_KEY=replace-with-a-long-random-ingest-key
 PORT=8000
 ```
 
@@ -123,9 +147,9 @@ Never commit real `.env` files or secrets.
 ## API summary
 
 - `GET /health`
-- `POST /api/traces`, `GET /api/traces`, `GET /api/traces/{trace_id}`, `DELETE /api/traces/{trace_id}`
+- `POST /api/traces` (ingest key if configured), `GET /api/traces`, `GET /api/traces/{trace_id}`, `DELETE /api/traces/{trace_id}` (ingest key if configured)
 - `GET /api/metrics/overview`, `/api/metrics/timeseries`, `/api/metrics/models`, `/api/metrics/tools`, `/api/metrics/errors`
-- `POST /api/demo/generate-traces?count=24`, `POST /api/demo/reset?count=24`
+- `POST /api/demo/generate-traces?count=24`, `POST /api/demo/reset?count=24` (ingest key if configured)
 
 Costs use demo model pricing and are estimates only, not billing-grade amounts.
 
@@ -142,7 +166,11 @@ See [`docs/deployment.md`](docs/deployment.md) for complete steps, CORS guidance
 ```ts
 import { ObservabilityClient } from "@portfolio/telemetry-sdk";
 
-const client = new ObservabilityClient({ apiUrl: process.env.OBSERVABILITY_API_URL!, appName: "demo-code-review-agent" });
+const client = new ObservabilityClient({
+  apiUrl: process.env.OBSERVABILITY_API_URL!,
+  apiKey: process.env.OBSERVABILITY_INGEST_API_KEY,
+  appName: "demo-code-review-agent",
+});
 const trace = client.createTrace({ sessionId: "session_123", operation: "issue_triage", model: "gpt-4.1-mini" });
 client.addStep(trace.id, { stepType: "llm_call", name: "analyze_repository", inputTokens: 1200, outputTokens: 300 });
 client.finishTrace(trace.id, { status: "success" });

@@ -7,7 +7,8 @@
     "apps/web",
     "packages/shared",
     "packages/telemetry-sdk",
-    "examples/demo-agent"
+    "examples/demo-agent",
+    "examples/openai-agent"
   ],
   "scripts": {
     "dev": "npm run dev:web",
@@ -15,6 +16,7 @@
     "build": "npm --workspace apps/web run build",
     "preview:web": "npm --workspace apps/web run preview",
     "demo:agent": "npm --workspace examples/demo-agent run start",
+    "openai:agent": "npm --workspace examples/openai-agent run start",
     "api:dev": "python3 -m uvicorn main:app --app-dir apps/api --host 0.0.0.0 --port ${PORT:-8000}",
     "docker:up": "docker compose up --build",
     "docker:down": "docker compose down"
@@ -23,6 +25,7 @@
     "node": ">=20"
   },
   "devDependencies": {
+    "@types/node": "^25.8.0",
     "tsx": "latest"
   }
 }

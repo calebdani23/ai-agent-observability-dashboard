@@ -1,5 +1,6 @@
 import os
 import random
+import secrets
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -7,7 +8,7 @@ from functools import lru_cache
 from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -44,6 +45,7 @@ class Settings(BaseSettings):
         alias="CORS_ORIGINS",
     )
     port: int = Field(default=8000, alias="PORT")
+    ingest_api_key: str | None = Field(default=None, alias="OBSERVABILITY_INGEST_API_KEY")
 
     @property
     def allowed_origins(self) -> list[str]:
@@ -156,6 +158,24 @@ def get_db() -> Session:
 
 
 DbSession = Annotated[Session, Depends(get_db)]
+
+
+def require_ingest_api_key(
+    x_observability_api_key: Annotated[str | None, Header(alias="X-Observability-Api-Key")] = None,
+    authorization: Annotated[str | None, Header()] = None,
+) -> None:
+    configured_key = settings.ingest_api_key
+    if not configured_key:
+        return
+
+    bearer_prefix = "Bearer "
+    bearer_token = authorization[len(bearer_prefix) :].strip() if authorization and authorization.startswith(bearer_prefix) else None
+    supplied_key = x_observability_api_key or bearer_token
+    if not supplied_key or not secrets.compare_digest(supplied_key, configured_key):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Valid ingest API key required")
+
+
+IngestAuth = Annotated[None, Depends(require_ingest_api_key)]
 
 
 def init_db() -> None:
@@ -438,7 +458,7 @@ def root() -> dict[str, str]:
 
 
 @app.post("/api/traces", response_model=TraceRead, status_code=status.HTTP_201_CREATED, tags=["traces"])
-def create_trace(payload: TraceCreate, db: DbSession) -> TraceRead:
+def create_trace(payload: TraceCreate, db: DbSession, _: IngestAuth) -> TraceRead:
     return serialize_trace(create_trace_record(db, payload))
 
 
@@ -481,7 +501,7 @@ def get_trace(trace_id: UUID, db: DbSession) -> TraceRead:
 
 
 @app.delete("/api/traces/{trace_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["traces"])
-def delete_trace(trace_id: UUID, db: DbSession) -> None:
+def delete_trace(trace_id: UUID, db: DbSession, _: IngestAuth) -> None:
     trace = db.get(AITrace, trace_id)
     if trace is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trace not found")
@@ -659,7 +679,11 @@ def demo_trace(index: int) -> TraceCreate:
 
 
 @app.post("/api/demo/generate-traces", response_model=DemoGenerateResponse, tags=["demo"])
-def generate_demo_traces(db: DbSession, count: Annotated[int, Query(ge=1, le=200)] = 24) -> DemoGenerateResponse:
+def generate_demo_traces(db: DbSession, _: IngestAuth, count: Annotated[int, Query(ge=1, le=200)] = 24) -> DemoGenerateResponse:
+    return create_demo_traces(db, count)
+
+
+def create_demo_traces(db: Session, count: int) -> DemoGenerateResponse:
     for index in range(count):
         create_trace_record(db, demo_trace(index))
     total = db.scalar(select(func.count()).select_from(AITrace)) or 0
@@ -667,10 +691,10 @@ def generate_demo_traces(db: DbSession, count: Annotated[int, Query(ge=1, le=200
 
 
 @app.post("/api/demo/reset", response_model=DemoGenerateResponse, tags=["demo"])
-def reset_demo_data(db: DbSession, count: Annotated[int, Query(ge=1, le=200)] = 24) -> DemoGenerateResponse:
+def reset_demo_data(db: DbSession, _: IngestAuth, count: Annotated[int, Query(ge=1, le=200)] = 24) -> DemoGenerateResponse:
     db.execute(delete(AITrace).where(AITrace.metadata_["demo"].as_boolean() == True))  # noqa: E712
     db.commit()
-    return generate_demo_traces(db, count=count)
+    return create_demo_traces(db, count)
 
 
 if __name__ == "__main__":

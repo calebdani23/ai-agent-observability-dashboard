@@ -41,10 +41,14 @@ A tool call records an external action: tool name, JSON input, JSON output, `suc
 
 The SDK accepts camelCase names (`sessionId`, `inputTokens`, `toolName`) and serializes them to this backend-compatible snake_case shape.
 
+## Ingest authentication
+
+Set `OBSERVABILITY_INGEST_API_KEY` on the backend to require a write key for `POST /api/traces`, `DELETE /api/traces/{trace_id}` and demo seed/reset writes. Clients should send the key as `X-Observability-Api-Key` (the SDK does this when `apiKey` is provided). Health, trace reads and metrics remain unauthenticated so the static frontend stays secret-free.
+
 ## Estimated cost
 
 Costs are calculated from mock model pricing per 1M input/output tokens. They are useful for product analytics and demos but are not billing-grade.
 
 ## Sensitive data
 
-Do not send real secrets, credentials, private customer content or provider keys. Prompt inspector views include a redaction notice; production instrumentation should redact before ingestion.
+Do not send real secrets, credentials, private customer content or provider keys. `OPENAI_API_KEY` belongs only in server-side/CLI environments such as `examples/openai-agent`; never expose it through frontend `VITE_*` variables. Prompt inspector views include a redaction notice; production instrumentation should redact before ingestion.

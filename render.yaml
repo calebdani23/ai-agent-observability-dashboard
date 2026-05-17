@@ -16,3 +16,5 @@ services:
         value: production
       - key: DEMO_MODE
         value: "true"
+      - key: OBSERVABILITY_INGEST_API_KEY
+        sync: false
