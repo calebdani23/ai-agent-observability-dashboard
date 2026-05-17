@@ -1,11 +1,22 @@
 import { demoErrors, demoModels, demoOverview, demoTimeseries, demoTools, demoTraceList, findDemoTrace } from "../data/demoData";
+import { supabase } from "../auth/supabase";
 import { API_URL, DEMO_MODE } from "./config";
-import type { DataResult, ErrorMetric, ModelMetric, OpenAIRunRequest, OpenAIRunResponse, OpenAISessionStatus, OverviewMetrics, TimeseriesPoint, ToolMetric, Trace, TraceDataset, TraceFilters, TraceListResponse } from "./types";
+import type { DataResult, ErrorMetric, ModelMetric, OpenAIRunRequest, OpenAIRunResponse, OpenAISessionStatus, OverviewMetrics, ProviderKey, ProviderKeyListResponse, TimeseriesPoint, ToolMetric, Trace, TraceDataset, TraceFilters, TraceListResponse } from "./types";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_URL}${path}`, { headers: { "Content-Type": "application/json" }, ...init });
+  const token = await currentAccessToken();
+  const headers = new Headers({ "Content-Type": "application/json", ...(init?.headers as Record<string, string> | undefined) });
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const response = await fetch(`${API_URL}${path}`, { ...init, headers });
   if (!response.ok) throw await apiError(response);
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
+}
+
+async function currentAccessToken() {
+  if (!supabase) return null;
+  const { data } = await supabase.auth.getSession();
+  return data.session?.access_token ?? null;
 }
 
 async function apiError(response: Response): Promise<Error> {
@@ -73,6 +84,9 @@ export const apiClient = {
   openAISessionStatus() { return request<OpenAISessionStatus>("/api/openai/session", { credentials: "include" }); },
   connectOpenAI(apiKey: string) { return request<OpenAISessionStatus>("/api/openai/sessions", { method: "POST", credentials: "include", body: JSON.stringify({ api_key: apiKey }) }); },
   disconnectOpenAI() { return request<OpenAISessionStatus>("/api/openai/session", { method: "DELETE", credentials: "include" }); },
+  providerKeys() { return request<ProviderKeyListResponse>("/api/provider-keys"); },
+  saveProviderKey(apiKey: string, label = "Personal OpenAI") { return request<ProviderKey>("/api/provider-keys", { method: "POST", body: JSON.stringify({ provider: "openai", label, api_key: apiKey }) }); },
+  deleteProviderKey(id: string) { return request<void>(`/api/provider-keys/${id}`, { method: "DELETE" }); },
   async runOpenAI(payload: OpenAIRunRequest) {
     const result = await request<OpenAIRunResponse>("/api/openai/runs", { method: "POST", credentials: "include", body: JSON.stringify(payload) });
     return { ...result, trace: normalizeTrace(result.trace) };

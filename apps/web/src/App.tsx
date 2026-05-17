@@ -7,12 +7,15 @@ import { OpenAIRunPage } from "./pages/OpenAIRunPage";
 import { TraceDetailPage } from "./pages/TraceDetailPage";
 import { TracesPage } from "./pages/TracesPage";
 import { API_URL, DATA_MODE_LABEL } from "./api/config";
+import { AuthProvider, useAuth } from "./auth/AuthContext";
+import { SignInPage } from "./pages/SignInPage";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
 });
 
 function Layout() {
+  const auth = useAuth();
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -24,6 +27,7 @@ function Layout() {
           <NavLink to="/traces">Traces</NavLink>
           <NavLink to="/openai-run">OpenAI Run</NavLink>
           <NavLink to="/analytics">Analytics</NavLink>
+          {auth.user ? <button className="button secondary" type="button" onClick={() => auth.signOut()}>Sign out</button> : <NavLink to="/sign-in">Sign in</NavLink>}
         </nav>
         <div className="source-pill" title={`API target: ${API_URL}`}>
           {DATA_MODE_LABEL}
@@ -36,6 +40,7 @@ function Layout() {
         <Route path="/traces/:traceId" element={<TraceDetailPage />} />
         <Route path="/openai-run" element={<OpenAIRunPage />} />
         <Route path="/analytics" element={<AnalyticsPage />} />
+        <Route path="/sign-in" element={<SignInPage />} />
       </Routes>
     </div>
   );
@@ -44,9 +49,11 @@ function Layout() {
 export function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <HashRouter>
-        <Layout />
-      </HashRouter>
+      <AuthProvider>
+        <HashRouter>
+          <Layout />
+        </HashRouter>
+      </AuthProvider>
     </QueryClientProvider>
   );
 }

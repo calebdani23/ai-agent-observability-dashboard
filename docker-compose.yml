@@ -8,6 +8,15 @@ services:
       ENVIRONMENT: ${ENVIRONMENT:-development}
       DEMO_MODE: ${DEMO_MODE:-true}
       PORT: ${PORT:-8000}
+      OBSERVABILITY_INGEST_API_KEY: ${OBSERVABILITY_INGEST_API_KEY:-dev-ingest-key}
+      SUPABASE_PROJECT_URL: ${SUPABASE_PROJECT_URL:-https://YOUR_PROJECT.supabase.co}
+      SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY:-your-public-supabase-publishable-or-anon-key}
+      PROVIDER_KEY_ENCRYPTION_KEYS: ${PROVIDER_KEY_ENCRYPTION_KEYS:-generate-with-python-cryptography-fernet}
+      OPENAI_DEFAULT_MODEL: ${OPENAI_DEFAULT_MODEL:-gpt-4o-mini}
+      OPENAI_ALLOWED_MODELS: ${OPENAI_ALLOWED_MODELS:-gpt-4o-mini,gpt-4.1-mini}
+      OPENAI_SESSION_ENCRYPTION_KEY: ${OPENAI_SESSION_ENCRYPTION_KEY:-}
+      OPENAI_SESSION_HASH_SECRET: ${OPENAI_SESSION_HASH_SECRET:-}
+      OPENAI_SESSION_TTL_MINUTES: ${OPENAI_SESSION_TTL_MINUTES:-60}
     ports:
       - "${PORT:-8000}:8000"
     depends_on:
@@ -27,6 +36,8 @@ services:
     command: sh -c "npm install && npm --workspace apps/web run dev -- --host 0.0.0.0"
     environment:
       VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+      VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-https://YOUR_PROJECT.supabase.co}
+      VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY:-your-public-supabase-publishable-or-anon-key}
       VITE_DEMO_MODE: ${VITE_DEMO_MODE:-true}
       VITE_REPO_URL: ${VITE_REPO_URL:-https://github.com/YOUR_USERNAME/ai-agent-observability-dashboard}
     ports:

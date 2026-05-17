@@ -1,7 +1,7 @@
 export type TraceStatus = "success" | "warning" | "error";
 export type DataSource = "live" | "local-demo" | "error";
 export type TraceKind = "demo" | "real_web_session" | "other_real_ingest";
-export type TraceDataset = "current_openai_session" | "all_real" | "demo" | "all";
+export type TraceDataset = "my_traces" | "current_openai_session" | "all_real" | "demo" | "all";
 
 export interface ToolCall {
   id: string;
@@ -70,3 +70,5 @@ export interface TraceFilters { app_name?: string; model?: string; status?: stri
 export interface OpenAISessionStatus { connected: boolean; expires_at?: string | null; key_hint?: string | null; }
 export interface OpenAIRunRequest { prompt: string; model?: string; }
 export interface OpenAIRunResponse { trace_id: string; trace: Trace; response?: string | null; status: TraceStatus | string; }
+export interface ProviderKey { id: string; provider: string; label: string; key_hint?: string | null; created_at: string; updated_at: string; last_used_at?: string | null; revoked_at?: string | null; }
+export interface ProviderKeyListResponse { items: ProviderKey[]; }

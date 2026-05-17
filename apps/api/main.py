@@ -25,7 +25,7 @@ TraceStatus = Literal["success", "error", "warning"]
 StepType = Literal["user_message", "llm_call", "tool_call", "retrieval", "final_response", "error"]
 ToolStatus = Literal["success", "error"]
 TraceKind = Literal["demo", "real_web_session", "other_real_ingest"]
-TraceDataset = Literal["current_openai_session", "all_real", "demo", "all"]
+TraceDataset = Literal["my_traces", "current_openai_session", "all_real", "demo", "all"]
 
 MODEL_PRICING: dict[str, dict[str, Decimal]] = {
     "gpt-4.1-mini": {"inputPer1M": Decimal("0.40"), "outputPer1M": Decimal("1.60")},
@@ -33,6 +33,8 @@ MODEL_PRICING: dict[str, dict[str, Decimal]] = {
     "claude-3.5-haiku": {"inputPer1M": Decimal("0.80"), "outputPer1M": Decimal("4.00")},
     "mock-fast": {"inputPer1M": Decimal("0.05"), "outputPer1M": Decimal("0.10")},
 }
+
+WEB_OPENAI_SOURCES = {"web_openai_session", "web_openai_authenticated"}
 
 
 class Settings(BaseSettings):
@@ -56,6 +58,9 @@ class Settings(BaseSettings):
     openai_session_ttl_minutes: int = Field(default=60, alias="OPENAI_SESSION_TTL_MINUTES")
     openai_default_model: str = Field(default="gpt-4o-mini", alias="OPENAI_DEFAULT_MODEL")
     openai_allowed_models: str = Field(default="gpt-4o-mini,gpt-4.1-mini", alias="OPENAI_ALLOWED_MODELS")
+    supabase_project_url: str | None = Field(default=None, alias="SUPABASE_PROJECT_URL")
+    supabase_publishable_key: str | None = Field(default=None, alias="SUPABASE_PUBLISHABLE_KEY")
+    provider_key_encryption_keys: str | None = Field(default=None, alias="PROVIDER_KEY_ENCRYPTION_KEYS")
 
     @property
     def allowed_origins(self) -> list[str]:
@@ -187,6 +192,21 @@ class OpenAISession(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
 
+class ProviderKey(Base):
+    __tablename__ = "provider_keys"
+
+    id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    label: Mapped[str] = mapped_column(String(160), nullable=False)
+    encrypted_api_key: Mapped[str] = mapped_column(Text)
+    key_hint: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
+
 engine = create_engine(settings.sqlalchemy_database_url, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
@@ -202,6 +222,16 @@ def get_db() -> Session:
 DbSession = Annotated[Session, Depends(get_db)]
 
 
+class AuthUser(BaseModel):
+    id: str
+    email: str | None = None
+    claims: dict[str, Any] = Field(default_factory=dict)
+
+
+def is_configured_ingest_key(token: str | None) -> bool:
+    return bool(token and settings.ingest_api_key and secrets.compare_digest(token, settings.ingest_api_key))
+
+
 def require_ingest_api_key(
     x_observability_api_key: Annotated[str | None, Header(alias="X-Observability-Api-Key")] = None,
     authorization: Annotated[str | None, Header()] = None,
@@ -213,11 +243,54 @@ def require_ingest_api_key(
     bearer_prefix = "Bearer "
     bearer_token = authorization[len(bearer_prefix) :].strip() if authorization and authorization.startswith(bearer_prefix) else None
     supplied_key = x_observability_api_key or bearer_token
-    if not supplied_key or not secrets.compare_digest(supplied_key, configured_key):
+    if not is_configured_ingest_key(supplied_key):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Valid ingest API key required")
 
 
 IngestAuth = Annotated[None, Depends(require_ingest_api_key)]
+
+
+def bearer_token_from_authorization(authorization: str | None) -> str | None:
+    bearer_prefix = "Bearer "
+    if authorization and authorization.startswith(bearer_prefix):
+        token = authorization[len(bearer_prefix) :].strip()
+        return token or None
+    return None
+
+
+def validate_supabase_user_token(token: str) -> AuthUser:
+    if not settings.supabase_project_url or not settings.supabase_publishable_key:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Supabase Auth is not configured on this backend")
+    url = f"{settings.supabase_project_url.rstrip('/')}/auth/v1/user"
+    try:
+        with httpx.Client(timeout=httpx.Timeout(10.0)) as client:
+            response = client.get(url, headers={"Authorization": f"Bearer {token}", "apikey": settings.supabase_publishable_key})
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Could not validate Supabase session") from exc
+    if response.status_code >= 400:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Valid Supabase session required")
+    data = response.json()
+    user_id = data.get("id")
+    if not isinstance(user_id, str) or not user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Valid Supabase session required")
+    return AuthUser(id=user_id, email=data.get("email"), claims=data)
+
+
+def get_optional_user(authorization: Annotated[str | None, Header()] = None) -> AuthUser | None:
+    token = bearer_token_from_authorization(authorization)
+    if is_configured_ingest_key(token):
+        return None
+    return validate_supabase_user_token(token) if token else None
+
+
+def get_required_user(current_user: Annotated[AuthUser | None, Depends(get_optional_user)]) -> AuthUser:
+    if current_user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sign in to access private observability data")
+    return current_user
+
+
+OptionalUser = Annotated[AuthUser | None, Depends(get_optional_user)]
+RequiredUser = Annotated[AuthUser, Depends(get_required_user)]
 
 
 def init_db() -> None:
@@ -375,6 +448,27 @@ class OpenAIRunResponse(BaseModel):
     status: TraceStatus
 
 
+class ProviderKeyCreateRequest(BaseModel):
+    api_key: str = Field(min_length=20, max_length=300)
+    provider: str = "openai"
+    label: str = "Personal OpenAI"
+
+
+class ProviderKeyRead(BaseModel):
+    id: UUID
+    provider: str
+    label: str
+    key_hint: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+
+class ProviderKeyListResponse(BaseModel):
+    items: list[ProviderKeyRead]
+
+
 def is_demo_trace_metadata(metadata: dict[str, Any] | None) -> bool:
     if not metadata:
         return False
@@ -389,7 +483,7 @@ def is_demo_trace_metadata(metadata: dict[str, Any] | None) -> bool:
 def is_web_openai_trace(trace: AITrace) -> bool:
     metadata = trace.metadata_ or {}
     return (
-        metadata.get("source") == "web_openai_session"
+        metadata.get("source") in WEB_OPENAI_SOURCES
         and trace.app_name == "web-openai-runner"
         and trace.provider == "openai"
         and trace.session_id.startswith("web_openai_")
@@ -416,7 +510,7 @@ def demo_trace_condition():
 
 def web_openai_trace_condition():
     return (
-        (AITrace.metadata_["source"].as_string() == "web_openai_session")
+        (AITrace.metadata_["source"].as_string().in_(list(WEB_OPENAI_SOURCES)))
         & (AITrace.app_name == "web-openai-runner")
         & (AITrace.provider == "openai")
         & (AITrace.session_id.startswith("web_openai_"))
@@ -434,14 +528,28 @@ def get_current_openai_session_trace_id(db: Session, raw_session_id: str | None)
     return current_openai_trace_session_id(session_row)
 
 
-def dataset_filter_condition(dataset: TraceDataset | None, current_session_trace_id: str | None = None):
-    if dataset is None or dataset == "all":
-        return None
+def private_trace_condition(user_id: str):
+    return (AITrace.user_id == user_id) & ~demo_trace_condition()
+
+
+def public_demo_condition():
+    return demo_trace_condition()
+
+
+def dataset_filter_condition(dataset: TraceDataset | None, current_session_trace_id: str | None = None, current_user_id: str | None = None):
+    if dataset is None or dataset == "my_traces":
+        return private_trace_condition(current_user_id) if current_user_id else public_demo_condition()
     if dataset == "demo":
         return demo_trace_condition()
     if dataset == "all_real":
-        return ~demo_trace_condition()
+        return private_trace_condition(current_user_id) if current_user_id else false()
+    if dataset == "all":
+        if current_user_id:
+            return private_trace_condition(current_user_id) | demo_trace_condition()
+        return demo_trace_condition()
     if dataset == "current_openai_session":
+        if current_user_id:
+            return private_trace_condition(current_user_id)
         if current_session_trace_id is None:
             return false()
         return (AITrace.session_id == current_session_trace_id) & web_openai_trace_condition() & ~demo_trace_condition()
@@ -599,21 +707,26 @@ def validate_mutating_origin(request: Request) -> None:
 
 
 def ensure_openai_session_configured() -> None:
-    if not settings.openai_session_hash_secret or len(settings.openai_session_hash_secret) < 32:
-        raise openai_error(status.HTTP_503_SERVICE_UNAVAILABLE, "session_secret_missing", "OpenAI web sessions are not configured on this backend.")
     try:
         get_fernet()
     except Exception as exc:
         if isinstance(exc, HTTPException):
             raise exc
-        raise openai_error(status.HTTP_503_SERVICE_UNAVAILABLE, "encryption_key_invalid", "OpenAI web session encryption is not configured correctly.") from exc
+        raise openai_error(status.HTTP_503_SERVICE_UNAVAILABLE, "encryption_key_invalid", "Provider key encryption is not configured correctly.") from exc
+
+
+def ensure_legacy_openai_session_configured() -> None:
+    if not settings.openai_session_hash_secret or len(settings.openai_session_hash_secret) < 32:
+        raise openai_error(status.HTTP_503_SERVICE_UNAVAILABLE, "session_secret_missing", "OpenAI web sessions are not configured on this backend.")
+    ensure_openai_session_configured()
 
 
 @lru_cache
 def get_fernet() -> MultiFernet:
-    keys = [key.strip() for key in (settings.openai_session_encryption_key or "").split(",") if key.strip()]
+    raw_keys = settings.provider_key_encryption_keys or settings.openai_session_encryption_key or ""
+    keys = [key.strip() for key in raw_keys.split(",") if key.strip()]
     if not keys:
-        raise openai_error(status.HTTP_503_SERVICE_UNAVAILABLE, "encryption_key_missing", "OpenAI web session encryption is not configured.")
+        raise openai_error(status.HTTP_503_SERVICE_UNAVAILABLE, "encryption_key_missing", "Provider key encryption is not configured.")
     fernets = [Fernet(key.encode("utf-8")) for key in keys]
     return MultiFernet(fernets)
 
@@ -632,7 +745,7 @@ def decrypt_api_key(encrypted_api_key: str) -> str:
 
 
 def hash_session_id(raw_session_id: str) -> str:
-    ensure_openai_session_configured()
+    ensure_legacy_openai_session_configured()
     return hashlib.sha256(f"{raw_session_id}:{settings.openai_session_hash_secret}".encode("utf-8")).hexdigest()
 
 
@@ -745,7 +858,8 @@ def extract_openai_response_text(data: dict[str, Any]) -> str:
 
 def create_web_openai_trace(
     db: Session,
-    session_row: OpenAISession,
+    key_hint_value: str | None,
+    user_id: str | None,
     prompt: str,
     model: str,
     started_at: datetime,
@@ -759,7 +873,7 @@ def create_web_openai_trace(
     output_tokens = int(usage.get("completion_tokens") or 0)
     trace_status: TraceStatus = "error" if error_message else "success"
     latency_ms = max(0, int((ended_at - started_at).total_seconds() * 1000))
-    safe_session_id = f"web_openai_{session_row.session_id_hash[:12]}"
+    safe_session_id = f"web_openai_{(user_id or 'legacy')[:12]}_{secrets.token_hex(4)}"
     steps = [
         TraceStepCreate(step_type="user_message", name="Browser prompt", input=prompt, started_at=started_at, ended_at=started_at, latency_ms=0),
         TraceStepCreate(
@@ -784,6 +898,7 @@ def create_web_openai_trace(
         TraceCreate(
             app_name="web-openai-runner",
             session_id=safe_session_id,
+            user_id=user_id,
             operation="web_openai_prompt",
             model=model,
             provider="openai",
@@ -795,10 +910,10 @@ def create_web_openai_trace(
             output_tokens=output_tokens,
             error_message=error_message,
             metadata={
-                "source": "web_openai_session",
+                "source": "web_openai_authenticated" if user_id else "web_openai_session",
                 "trace_kind": "real_web_session",
-                "key_hint": session_row.key_hint,
-                "privacy_notice": "Prompt and response are stored as traces visible anywhere this dashboard/API is visible.",
+                "key_hint": key_hint_value,
+                "privacy_notice": "Prompt and response are stored as private traces scoped to your authenticated user.",
             },
             steps=steps,
         ),
@@ -837,39 +952,84 @@ def root() -> dict[str, str]:
     return {"service": settings.service_name, "environment": settings.environment, "docs": "/docs"}
 
 
-@app.post("/api/openai/sessions", response_model=OpenAISessionStatusResponse, tags=["openai"])
-def create_openai_session(payload: OpenAISessionCreateRequest, request: Request, response: Response, db: DbSession) -> OpenAISessionStatusResponse:
+def serialize_provider_key(key_row: ProviderKey) -> ProviderKeyRead:
+    return ProviderKeyRead(id=key_row.id, provider=key_row.provider, label=key_row.label, key_hint=key_row.key_hint, created_at=key_row.created_at, updated_at=key_row.updated_at, last_used_at=key_row.last_used_at, revoked_at=key_row.revoked_at)
+
+
+@app.get("/api/provider-keys", response_model=ProviderKeyListResponse, tags=["provider-keys"])
+def list_provider_keys(db: DbSession, current_user: RequiredUser) -> ProviderKeyListResponse:
+    rows = db.scalars(select(ProviderKey).where(ProviderKey.user_id == current_user.id, ProviderKey.revoked_at.is_(None)).order_by(ProviderKey.updated_at.desc())).all()
+    return ProviderKeyListResponse(items=[serialize_provider_key(row) for row in rows])
+
+
+@app.post("/api/provider-keys", response_model=ProviderKeyRead, status_code=status.HTTP_201_CREATED, tags=["provider-keys"])
+def upsert_provider_key(payload: ProviderKeyCreateRequest, request: Request, db: DbSession, current_user: RequiredUser) -> ProviderKeyRead:
     validate_json_request(request)
     validate_mutating_origin(request)
-    cleanup_expired_openai_sessions(db)
+    provider = payload.provider.strip().lower()
+    if provider != "openai":
+        raise openai_error(status.HTTP_400_BAD_REQUEST, "unsupported_provider", "This MVP supports OpenAI provider keys.")
     api_key = validate_openai_key_shape(payload.api_key)
-    raw_session_id = secrets.token_urlsafe(48)
-    session_hash = hash_session_id(raw_session_id)
-    existing_raw_session_id = request.cookies.get(OPENAI_SESSION_COOKIE)
-    existing_session = get_current_openai_session(db, existing_raw_session_id) if existing_raw_session_id else None
-    if existing_session is not None:
-        db.delete(existing_session)
-        db.commit()
+    label = payload.label.strip()[:160] or "Personal OpenAI"
     now = utcnow()
-    expires_at = now + settings.openai_ttl
-    session_row = OpenAISession(
-        session_id_hash=session_hash,
-        encrypted_api_key=encrypt_api_key(api_key),
-        key_hint=key_hint(api_key),
-        created_at=now,
-        expires_at=expires_at,
-    )
-    db.add(session_row)
+    existing = db.scalar(select(ProviderKey).where(ProviderKey.user_id == current_user.id, ProviderKey.provider == provider, ProviderKey.revoked_at.is_(None)).order_by(ProviderKey.created_at.desc()))
+    if existing:
+        existing.label = label
+        existing.encrypted_api_key = encrypt_api_key(api_key)
+        existing.key_hint = key_hint(api_key)
+        existing.updated_at = now
+        key_row = existing
+    else:
+        key_row = ProviderKey(user_id=current_user.id, provider=provider, label=label, encrypted_api_key=encrypt_api_key(api_key), key_hint=key_hint(api_key), created_at=now, updated_at=now)
+        db.add(key_row)
     db.commit()
-    set_openai_cookie(response, raw_session_id)
-    return OpenAISessionStatusResponse(connected=True, expires_at=expires_at, key_hint=session_row.key_hint)
+    db.refresh(key_row)
+    return serialize_provider_key(key_row)
+
+
+@app.delete("/api/provider-keys/{provider_key_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["provider-keys"])
+def delete_provider_key(provider_key_id: UUID, request: Request, db: DbSession, current_user: RequiredUser) -> None:
+    validate_mutating_origin(request)
+    key_row = db.get(ProviderKey, provider_key_id)
+    if key_row is None or key_row.user_id != current_user.id or key_row.revoked_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Provider key not found")
+    now = utcnow()
+    key_row.revoked_at = now
+    key_row.updated_at = now
+    key_row.encrypted_api_key = ""
+    db.commit()
+
+
+@app.post("/api/openai/sessions", response_model=OpenAISessionStatusResponse, tags=["openai"])
+def create_openai_session(payload: OpenAISessionCreateRequest, request: Request, response: Response, db: DbSession, current_user: RequiredUser) -> OpenAISessionStatusResponse:
+    validate_json_request(request)
+    validate_mutating_origin(request)
+    api_key = validate_openai_key_shape(payload.api_key)
+    now = utcnow()
+    existing = db.scalar(select(ProviderKey).where(ProviderKey.user_id == current_user.id, ProviderKey.provider == "openai", ProviderKey.revoked_at.is_(None)).order_by(ProviderKey.created_at.desc()))
+    if existing:
+        existing.encrypted_api_key = encrypt_api_key(api_key)
+        existing.key_hint = key_hint(api_key)
+        existing.label = "Personal OpenAI"
+        existing.updated_at = now
+        key_row = existing
+    else:
+        key_row = ProviderKey(user_id=current_user.id, provider="openai", label="Personal OpenAI", encrypted_api_key=encrypt_api_key(api_key), key_hint=key_hint(api_key), created_at=now, updated_at=now)
+        db.add(key_row)
+    db.commit()
+    clear_openai_cookie(response)
+    return OpenAISessionStatusResponse(connected=True, expires_at=None, key_hint=key_row.key_hint)
 
 
 @app.get("/api/openai/session", response_model=OpenAISessionStatusResponse, tags=["openai"])
 def get_openai_session_status(
     db: DbSession,
+    current_user: OptionalUser,
     ai_openai_session: Annotated[str | None, Cookie(alias=OPENAI_SESSION_COOKIE)] = None,
 ) -> OpenAISessionStatusResponse:
+    if current_user is not None:
+        key_row = db.scalar(select(ProviderKey).where(ProviderKey.user_id == current_user.id, ProviderKey.provider == "openai", ProviderKey.revoked_at.is_(None)).order_by(ProviderKey.created_at.desc()))
+        return OpenAISessionStatusResponse(connected=key_row is not None, key_hint=key_row.key_hint if key_row else None)
     session_row = get_current_openai_session(db, ai_openai_session)
     if session_row is None:
         return OpenAISessionStatusResponse(connected=False)
@@ -877,30 +1037,31 @@ def get_openai_session_status(
 
 
 @app.delete("/api/openai/session", response_model=OpenAISessionStatusResponse, tags=["openai"])
-def delete_openai_session(request: Request, response: Response, db: DbSession) -> OpenAISessionStatusResponse:
+def delete_openai_session(request: Request, response: Response, db: DbSession, current_user: RequiredUser) -> OpenAISessionStatusResponse:
     validate_mutating_origin(request)
-    session_row = get_current_openai_session(db, request.cookies.get(OPENAI_SESSION_COOKIE), delete_expired=False)
-    if session_row is not None:
-        db.delete(session_row)
-        db.commit()
+    now = utcnow()
+    for key_row in db.scalars(select(ProviderKey).where(ProviderKey.user_id == current_user.id, ProviderKey.provider == "openai", ProviderKey.revoked_at.is_(None))).all():
+        key_row.revoked_at = now
+        key_row.updated_at = now
+        key_row.encrypted_api_key = ""
+    db.commit()
     clear_openai_cookie(response)
     return OpenAISessionStatusResponse(connected=False)
 
 
 @app.post("/api/openai/runs", response_model=OpenAIRunResponse, tags=["openai"])
-async def run_openai_prompt(payload: OpenAIRunRequest, request: Request, db: DbSession) -> OpenAIRunResponse:
+async def run_openai_prompt(payload: OpenAIRunRequest, request: Request, db: DbSession, current_user: RequiredUser) -> OpenAIRunResponse:
     validate_json_request(request)
     validate_mutating_origin(request)
-    cleanup_expired_openai_sessions(db)
     prompt = payload.prompt.strip()
     if not prompt:
         raise openai_error(status.HTTP_400_BAD_REQUEST, "invalid_prompt", "Enter a prompt before running OpenAI.")
     model = normalize_openai_model(payload.model)
-    session_row = get_current_openai_session(db, request.cookies.get(OPENAI_SESSION_COOKIE))
-    if session_row is None:
-        raise openai_error(status.HTTP_401_UNAUTHORIZED, "openai_session_required", "Reconnect your OpenAI key before running a prompt.")
+    key_row = db.scalar(select(ProviderKey).where(ProviderKey.user_id == current_user.id, ProviderKey.provider == "openai", ProviderKey.revoked_at.is_(None)).order_by(ProviderKey.created_at.desc()))
+    if key_row is None or not key_row.encrypted_api_key:
+        raise openai_error(status.HTTP_401_UNAUTHORIZED, "provider_key_required", "Save your OpenAI key before running a prompt.")
     started_at = utcnow()
-    api_key = decrypt_api_key(session_row.encrypted_api_key)
+    api_key = decrypt_api_key(key_row.encrypted_api_key)
     provider_data: dict[str, Any] | None = None
     response_text: str | None = None
     error_message: str | None = None
@@ -916,8 +1077,9 @@ async def run_openai_prompt(payload: OpenAIRunRequest, request: Request, db: DbS
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
         error_message = str(detail.get("message") or "OpenAI request failed.")
-    session_row.last_used_at = utcnow()
-    trace = create_web_openai_trace(db, session_row, prompt, model, started_at, response_text, provider_data, error_message)
+    key_row.last_used_at = utcnow()
+    key_row.updated_at = key_row.last_used_at
+    trace = create_web_openai_trace(db, key_row.key_hint, current_user.id, prompt, model, started_at, response_text, provider_data, error_message)
     serialized = serialize_trace(trace)
     if error_message:
         raise HTTPException(
@@ -928,13 +1090,27 @@ async def run_openai_prompt(payload: OpenAIRunRequest, request: Request, db: DbS
 
 
 @app.post("/api/traces", response_model=TraceRead, status_code=status.HTTP_201_CREATED, tags=["traces"])
-def create_trace(payload: TraceCreate, db: DbSession, _: IngestAuth) -> TraceRead:
+def create_trace(
+    payload: TraceCreate,
+    db: DbSession,
+    current_user: OptionalUser,
+    x_observability_api_key: Annotated[str | None, Header(alias="X-Observability-Api-Key")] = None,
+    authorization: Annotated[str | None, Header()] = None,
+) -> TraceRead:
+    if current_user is not None:
+        payload.user_id = current_user.id
+        if payload.metadata is None:
+            payload.metadata = {}
+        payload.metadata["visibility"] = "private"
+    else:
+        require_ingest_api_key(x_observability_api_key, authorization)
     return serialize_trace(create_trace_record(db, payload))
 
 
 @app.get("/api/traces", response_model=TraceListResponse, tags=["traces"])
 def list_traces(
     db: DbSession,
+    current_user: OptionalUser,
     dataset: TraceDataset | None = None,
     app_name: str | None = None,
     model: str | None = None,
@@ -948,7 +1124,7 @@ def list_traces(
     count_query = select(func.count()).select_from(AITrace)
     filters = []
     current_session_trace_id = get_current_openai_session_trace_id(db, ai_openai_session) if dataset == "current_openai_session" else None
-    dataset_condition = dataset_filter_condition(dataset, current_session_trace_id)
+    dataset_condition = dataset_filter_condition(dataset, current_session_trace_id, current_user.id if current_user else None)
     if dataset_condition is not None:
         filters.append(dataset_condition)
     if app_name:
@@ -972,19 +1148,35 @@ def list_traces(
 def get_trace(
     trace_id: UUID,
     db: DbSession,
+    current_user: OptionalUser,
     ai_openai_session: Annotated[str | None, Cookie(alias=OPENAI_SESSION_COOKIE)] = None,
 ) -> TraceRead:
     trace = db.get(AITrace, trace_id)
     if trace is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trace not found")
+    if not is_demo_trace_metadata(trace.metadata_) and (current_user is None or trace.user_id != current_user.id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trace not found")
     return serialize_trace(trace, current_session_trace_id=get_current_openai_session_trace_id(db, ai_openai_session))
 
 
 @app.delete("/api/traces/{trace_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["traces"])
-def delete_trace(trace_id: UUID, db: DbSession, _: IngestAuth) -> None:
+def delete_trace(
+    trace_id: UUID,
+    db: DbSession,
+    current_user: OptionalUser,
+    x_observability_api_key: Annotated[str | None, Header(alias="X-Observability-Api-Key")] = None,
+    authorization: Annotated[str | None, Header()] = None,
+) -> None:
     trace = db.get(AITrace, trace_id)
     if trace is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trace not found")
+    if current_user is not None:
+        if trace.user_id != current_user.id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trace not found")
+    else:
+        require_ingest_api_key(x_observability_api_key, authorization)
+        if not is_demo_trace_metadata(trace.metadata_):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trace not found")
     db.delete(trace)
     db.commit()
 
@@ -992,11 +1184,12 @@ def delete_trace(trace_id: UUID, db: DbSession, _: IngestAuth) -> None:
 @app.get("/api/metrics/overview", tags=["metrics"])
 def metrics_overview(
     db: DbSession,
+    current_user: OptionalUser,
     dataset: TraceDataset | None = None,
     ai_openai_session: Annotated[str | None, Cookie(alias=OPENAI_SESSION_COOKIE)] = None,
 ) -> dict[str, Any]:
     current_session_trace_id = get_current_openai_session_trace_id(db, ai_openai_session) if dataset == "current_openai_session" else None
-    condition = dataset_filter_condition(dataset, current_session_trace_id)
+    condition = dataset_filter_condition(dataset, current_session_trace_id, current_user.id if current_user else None)
 
     def filtered(statement):
         return statement.where(condition) if condition is not None else statement
@@ -1025,12 +1218,13 @@ def metrics_overview(
 @app.get("/api/metrics/timeseries", tags=["metrics"])
 def metrics_timeseries(
     db: DbSession,
+    current_user: OptionalUser,
     dataset: TraceDataset | None = None,
     ai_openai_session: Annotated[str | None, Cookie(alias=OPENAI_SESSION_COOKIE)] = None,
 ) -> list[dict[str, Any]]:
     day = func.date(AITrace.started_at)
     current_session_trace_id = get_current_openai_session_trace_id(db, ai_openai_session) if dataset == "current_openai_session" else None
-    condition = dataset_filter_condition(dataset, current_session_trace_id)
+    condition = dataset_filter_condition(dataset, current_session_trace_id, current_user.id if current_user else None)
     query = select(
         day.label("day"),
         func.count(AITrace.id),
@@ -1054,11 +1248,12 @@ def metrics_timeseries(
 @app.get("/api/metrics/models", tags=["metrics"])
 def metrics_models(
     db: DbSession,
+    current_user: OptionalUser,
     dataset: TraceDataset | None = None,
     ai_openai_session: Annotated[str | None, Cookie(alias=OPENAI_SESSION_COOKIE)] = None,
 ) -> list[dict[str, Any]]:
     current_session_trace_id = get_current_openai_session_trace_id(db, ai_openai_session) if dataset == "current_openai_session" else None
-    condition = dataset_filter_condition(dataset, current_session_trace_id)
+    condition = dataset_filter_condition(dataset, current_session_trace_id, current_user.id if current_user else None)
     query = select(
             AITrace.model,
             func.count(AITrace.id),
@@ -1092,11 +1287,12 @@ def metrics_models(
 @app.get("/api/metrics/tools", response_model=list[ToolMetric], tags=["metrics"])
 def metrics_tools(
     db: DbSession,
+    current_user: OptionalUser,
     dataset: TraceDataset | None = None,
     ai_openai_session: Annotated[str | None, Cookie(alias=OPENAI_SESSION_COOKIE)] = None,
 ) -> list[ToolMetric]:
     current_session_trace_id = get_current_openai_session_trace_id(db, ai_openai_session) if dataset == "current_openai_session" else None
-    condition = dataset_filter_condition(dataset, current_session_trace_id)
+    condition = dataset_filter_condition(dataset, current_session_trace_id, current_user.id if current_user else None)
     query = select(ToolCall.tool_name, func.count(ToolCall.id)).join(AITrace, ToolCall.trace_id == AITrace.id)
     if condition is not None:
         query = query.where(condition)
@@ -1111,12 +1307,13 @@ def metrics_tools(
 @app.get("/api/metrics/errors", tags=["metrics"])
 def metrics_errors(
     db: DbSession,
+    current_user: OptionalUser,
     dataset: TraceDataset | None = None,
     ai_openai_session: Annotated[str | None, Cookie(alias=OPENAI_SESSION_COOKIE)] = None,
 ) -> list[dict[str, Any]]:
     error_type = func.coalesce(AITrace.error_message, "unknown")
     current_session_trace_id = get_current_openai_session_trace_id(db, ai_openai_session) if dataset == "current_openai_session" else None
-    condition = dataset_filter_condition(dataset, current_session_trace_id)
+    condition = dataset_filter_condition(dataset, current_session_trace_id, current_user.id if current_user else None)
     filters = [AITrace.status == "error"]
     if condition is not None:
         filters.append(condition)
@@ -1149,7 +1346,7 @@ def demo_trace(index: int) -> TraceCreate:
     return TraceCreate(
         app_name=app_name,
         session_id=f"session-{random.randint(1000, 9999)}",
-        user_id=f"demo-user-{random.randint(1, 8)}",
+        user_id=None,
         operation=operation,
         model=model,
         provider="mock",

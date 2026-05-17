@@ -12,7 +12,7 @@ AI agent behavior is hard to debug when prompts, tool calls, cost and failures a
 - Live API integration with production live-only defaults and explicit local demo fallback when enabled.
 - Metric cards and charts for requests, tokens, estimated cost, latency, model usage and errors.
 - Trace timeline with prompt inspector, step details, metadata, tool-call input/output and redaction notice.
-- Temporary web OpenAI key sessions: users can paste a personal key, the backend stores it encrypted with TTL, runs OpenAI server-side, and records the run as a trace.
+- Supabase Auth private workspace: signed-in users get private real traces/metrics and encrypted per-user BYOK OpenAI key storage on the backend.
 - TypeScript telemetry SDK and demo agent for Travel Planning, Code Review and Customer Support scenarios.
 - Protected ingest path plus a real OpenAI example that posts traces from a server-side/CLI environment.
 - GitHub Pages workflow for the frontend and Render/Koyeb + Neon/Supabase deployment docs for the backend/database.
@@ -37,7 +37,7 @@ deterministic local demo fixtures + visible banner
 Production/live-only mode -> API unavailable -> explicit error state, no masked demo data
 
 Demo/OpenAI agent -> telemetry SDK + ingest key -> POST /api/traces -> dashboard/analytics refresh
-Browser OpenAI run -> temporary HttpOnly cookie -> backend decrypts key -> OpenAI -> stored trace
+Browser OpenAI run -> Supabase access token -> backend decrypts per-user key -> OpenAI -> private user-owned trace
 ```
 
 ## Screenshots
@@ -73,8 +73,9 @@ npm run build
 DATABASE_URL=postgresql://observability:observability@localhost:5432/observability \
 PORT=8000 CORS_ORIGINS=http://localhost:5173 DEMO_MODE=true \
 OBSERVABILITY_INGEST_API_KEY=dev-ingest-key \
-OPENAI_SESSION_ENCRYPTION_KEY=generate-with-python-cryptography-fernet \
-OPENAI_SESSION_HASH_SECRET=replace-with-a-different-long-random-secret \
+SUPABASE_PROJECT_URL=https://YOUR_PROJECT.supabase.co \
+SUPABASE_PUBLISHABLE_KEY=your-public-supabase-publishable-or-anon-key \
+PROVIDER_KEY_ENCRYPTION_KEYS=generate-with-python-cryptography-fernet \
 uvicorn main:app --app-dir apps/api --host 0.0.0.0 --port 8000
 ```
 
@@ -131,6 +132,8 @@ Frontend variables are safe public `VITE_*` values only:
 
 ```bash
 VITE_API_URL=http://localhost:8000
+VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=your-public-supabase-publishable-or-anon-key
 # Leave unset for production live-only builds.
 # For local development only, set VITE_DEMO_MODE=true to enable demo fallback.
 # VITE_DEMO_MODE=true
@@ -147,9 +150,15 @@ CORS_ORIGINS=http://localhost:5173,https://YOUR_GITHUB_USERNAME.github.io
 ENVIRONMENT=development
 DEMO_MODE=true
 OBSERVABILITY_INGEST_API_KEY=replace-with-a-long-random-ingest-key
-OPENAI_SESSION_ENCRYPTION_KEY=generate-with-python-cryptography-fernet
-OPENAI_SESSION_HASH_SECRET=replace-with-a-different-long-random-secret
-OPENAI_SESSION_TTL_MINUTES=60
+SUPABASE_PROJECT_URL=https://YOUR_PROJECT.supabase.co
+SUPABASE_PUBLISHABLE_KEY=your-public-supabase-publishable-or-anon-key
+PROVIDER_KEY_ENCRYPTION_KEYS=generate-with-python-cryptography-fernet
+OPENAI_DEFAULT_MODEL=gpt-4o-mini
+OPENAI_ALLOWED_MODELS=gpt-4o-mini,gpt-4.1-mini
+# Legacy OpenAI session-cookie compatibility only; prefer Supabase Auth + PROVIDER_KEY_ENCRYPTION_KEYS.
+# OPENAI_SESSION_ENCRYPTION_KEY=generate-with-python-cryptography-fernet
+# OPENAI_SESSION_HASH_SECRET=replace-with-a-different-long-random-secret
+# OPENAI_SESSION_TTL_MINUTES=60
 PORT=8000
 ```
 
@@ -157,14 +166,14 @@ Never commit real `.env` files or secrets.
 
 Generate the Fernet encryption key with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`.
 
-The `#/openai-run` page sends a browser-entered OpenAI key to the backend only, stores it encrypted in Postgres behind an opaque `HttpOnly` cookie, and clears it on disconnect or TTL expiry. The frontend remains secret-free. Prompts and model responses from this MVP are stored as regular traces visible through the current public dashboard/API, so do not submit sensitive prompts or secrets.
+The `#/openai-run` page now requires Supabase sign-in, sends a browser-entered OpenAI key to the backend only, stores it encrypted in Postgres per user, and clears it on disconnect. The frontend remains secret-free. Prompts and model responses are stored as private traces scoped to the authenticated user, while signed-out visitors can only inspect demo/public telemetry.
 
 ## API summary
 
 - `GET /health`
 - `POST /api/traces` (ingest key if configured), `GET /api/traces`, `GET /api/traces/{trace_id}`, `DELETE /api/traces/{trace_id}` (ingest key if configured)
-- Trace and metrics reads support `dataset=current_openai_session|all_real|demo|all`. `current_openai_session` is a convenience filter based on the temporary OpenAI session cookie; it is not account auth or privacy isolation, and missing/expired sessions return empty scoped results.
-- `POST /api/openai/sessions`, `GET /api/openai/session`, `DELETE /api/openai/session`, `POST /api/openai/runs` for temporary encrypted server-side OpenAI key sessions
+- Trace and metrics reads support `dataset=my_traces|demo|all` in the product UI. Authenticated reads default to user-owned private traces; unauthenticated reads are demo-only. Legacy `all_real`/`current_openai_session` values are owner-scoped or compatibility-only.
+- `GET/POST/DELETE /api/provider-keys` and `POST /api/openai/runs` for authenticated encrypted per-user BYOK OpenAI runs.
 - `GET /api/metrics/overview`, `/api/metrics/timeseries`, `/api/metrics/models`, `/api/metrics/tools`, `/api/metrics/errors`
 - `POST /api/demo/generate-traces?count=24`, `POST /api/demo/reset?count=24` (ingest key if configured)
 

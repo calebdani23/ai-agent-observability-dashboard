@@ -30,6 +30,8 @@ jobs:
           VITE_API_URL: ${{ vars.VITE_API_URL }}
           VITE_DEMO_MODE: ${{ vars.VITE_DEMO_MODE }}
           VITE_REPO_URL: ${{ vars.VITE_REPO_URL }}
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.VITE_SUPABASE_PUBLISHABLE_KEY }}
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

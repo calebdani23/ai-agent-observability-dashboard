@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { apiClient } from "../api/client";
 import type { OpenAISessionStatus } from "../api/types";
 import { Card, PageHeader } from "../components/ui";
+import { useAuth } from "../auth/AuthContext";
 
 const models = ["gpt-4o-mini", "gpt-4.1-mini"];
 
@@ -17,6 +18,7 @@ function errorTraceId(error: unknown) {
 
 export function OpenAIRunPage() {
   const [session, setSession] = useState<OpenAISessionStatus>({ connected: false });
+  const auth = useAuth();
   const [checking, setChecking] = useState(true);
   const [apiKey, setApiKey] = useState("");
   const [prompt, setPrompt] = useState("Summarize one practical benefit of AI observability in two sentences.");
@@ -27,11 +29,12 @@ export function OpenAIRunPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!auth.user) { setSession({ connected: false }); setChecking(false); return; }
     apiClient.openAISessionStatus()
       .then(setSession)
       .catch(() => setSession({ connected: false }))
       .finally(() => setChecking(false));
-  }, []);
+  }, [auth.user?.id]);
 
   async function connect(event: FormEvent) {
     event.preventDefault();
@@ -59,28 +62,29 @@ export function OpenAIRunPage() {
   return (
     <main>
       <PageHeader eyebrow="Backend-run OpenAI" title="Run with your OpenAI key">
-        Connect a personal OpenAI API key for a temporary, encrypted server-side session, then create a real trace from one backend-executed prompt.
+        Save a personal OpenAI API key encrypted on the backend, then create a private authenticated trace from one backend-executed prompt.
       </PageHeader>
+      {!auth.user && <div className="data-notice warning"><strong>Sign-in required:</strong> OpenAI runs use persistent per-user encrypted BYOK storage. <Link to="/sign-in">Sign in</Link> to connect a key; public visitors can continue exploring demo traces.</div>}
       <section className="two-col openai-layout">
-        <Card title="Temporary server-side key session">
-          <div className="data-notice warning"><strong>Privacy notice:</strong> your key is sent only to the backend, stored encrypted with a short TTL, and returned only as a hint. Prompts and model responses are stored as traces visible anywhere this public dashboard/API is visible. Do not submit sensitive prompts, secrets, or private data.</div>
+        <Card title="Encrypted server-side provider key">
+          <div className="data-notice warning"><strong>Privacy notice:</strong> your key is sent only to the backend, encrypted at rest per signed-in user, and returned only as a hint. Prompts and model responses are stored as private traces scoped to your account. Do not submit sensitive prompts, secrets, or private data.</div>
           {checking ? <p>Checking session status…</p> : <><p className={session.connected ? "status-badge success inline" : "status-badge warning inline"}>{session.connected ? `Connected ${session.key_hint ? `(${session.key_hint})` : ""}` : "Not connected"}</p>{session.connected && session.expires_at && <p className="muted">Expires {new Date(session.expires_at).toLocaleString()}</p>}</>}
           {!session.connected ? (
             <form className="stack" onSubmit={connect}>
               <label>OpenAI API key<input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="sk-..." autoComplete="off" /></label>
-              <button className="button primary" disabled={busy !== null || apiKey.trim().length < 20}>{busy === "connect" ? "Connecting…" : "Connect key"}</button>
+              <button className="button primary" disabled={!auth.user || busy !== null || apiKey.trim().length < 20}>{busy === "connect" ? "Saving…" : "Save encrypted key"}</button>
             </form>
-          ) : <button className="button secondary" onClick={disconnect} disabled={busy !== null}>{busy === "disconnect" ? "Disconnecting…" : "Disconnect and clear session"}</button>}
+          ) : <button className="button secondary" onClick={disconnect} disabled={busy !== null}>{busy === "disconnect" ? "Clearing…" : "Clear stored key"}</button>}
         </Card>
         <Card title="Run a prompt and create a trace">
           <form className="stack" onSubmit={run}>
             <label>Model<select value={model} onChange={(event) => setModel(event.target.value)}>{models.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
             <label>Prompt<textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={8} maxLength={8000} /></label>
-            <button className="button primary" disabled={!session.connected || busy !== null || !prompt.trim()}>{busy === "run" ? "Running on backend…" : "Run OpenAI and record trace"}</button>
+            <button className="button primary" disabled={!auth.user || !session.connected || busy !== null || !prompt.trim()}>{busy === "run" ? "Running on backend…" : "Run OpenAI and record private trace"}</button>
           </form>
           {error && <div className="data-notice error">{error}</div>}
           {response !== null && <div className="result-box"><h3>OpenAI response</h3><p>{response}</p></div>}
-          {traceId && <div className="filter-bar"><Link className="button secondary" to={`/traces/${traceId}`}>{error ? "Open failed trace" : "Open generated trace"}</Link><Link className="button primary" to="/traces?dataset=current_openai_session">View my live traces</Link></div>}
+          {traceId && <div className="filter-bar"><Link className="button secondary" to={`/traces/${traceId}`}>{error ? "Open failed trace" : "Open generated trace"}</Link><Link className="button primary" to="/traces?dataset=my_traces">View my private traces</Link></div>}
         </Card>
       </section>
     </main>
