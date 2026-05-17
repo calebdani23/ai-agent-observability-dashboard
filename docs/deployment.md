@@ -11,11 +11,23 @@ The workflow runs `npm ci`, `npm run build` and uploads `apps/web/dist`. Product
 
 ## Backend: Render
 
-- Root directory: `apps/api`
-- Runtime: Python
-- Build command: `pip install -r requirements.txt`
-- Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
-- Environment variables: `DATABASE_URL`, `CORS_ORIGINS`, `ENVIRONMENT=production`, `DEMO_MODE=true`
+Use the repository `render.yaml` blueprint for the fastest setup:
+
+1. In Render, choose **New > Blueprint** and connect this repository.
+2. Confirm the free web service from `render.yaml`.
+3. Set `DATABASE_URL` when prompted using a Neon/Supabase Postgres connection string.
+4. Set `CORS_ORIGINS` when prompted, for example:
+   `http://localhost:5173,https://YOUR_GITHUB_USERNAME.github.io,https://YOUR_GITHUB_USERNAME.github.io/ai-agent-observability-dashboard`.
+5. Deploy, then open `/health` on the Render service URL.
+
+The blueprint creates:
+
+- Web service: `ai-agent-observability-api`
+- Build command: `pip install -r apps/api/requirements.txt`
+- Start command: `uvicorn main:app --app-dir apps/api --host 0.0.0.0 --port $PORT`
+- Health check path: `/health`
+
+Manual Render setup is also supported with the same Python service settings and environment variables: `DATABASE_URL`, `CORS_ORIGINS`, `ENVIRONMENT=production`, `DEMO_MODE=true`.
 
 ## Backend: Koyeb
 

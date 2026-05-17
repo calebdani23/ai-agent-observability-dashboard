@@ -130,7 +130,7 @@ Costs use demo model pricing and are estimates only, not billing-grade amounts.
 ## Deployment
 
 - Frontend: GitHub Pages via `.github/workflows/deploy-pages.yml`; Vite production base is `/ai-agent-observability-dashboard/` and routes use hash URLs so direct links work on static hosting.
-- Backend: Render or Koyeb web service using `uvicorn main:app --host 0.0.0.0 --port $PORT` from `apps/api`.
+- Backend: Render Blueprint via `render.yaml`, or a Koyeb/Python web service using `uvicorn main:app --app-dir apps/api --host 0.0.0.0 --port $PORT`.
 - Database: Neon or Supabase Postgres via `DATABASE_URL`; do not rely on ephemeral filesystem storage.
 
 See [`docs/deployment.md`](docs/deployment.md) for complete steps, CORS guidance and troubleshooting.

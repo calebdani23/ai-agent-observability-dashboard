@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: ai-agent-observability-api
+    runtime: python
+    plan: free
+    autoDeploy: true
+    buildCommand: pip install -r apps/api/requirements.txt
+    startCommand: uvicorn main:app --app-dir apps/api --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: ENVIRONMENT
+        value: production
+      - key: DEMO_MODE
+        value: "true"
