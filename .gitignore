@@ -34,6 +34,7 @@ yarn-error.log*
 .opencode-runtime/
 scripts/
 sdd/
+docs/helps/screenshots/
 
 # Test / coverage
 coverage/
